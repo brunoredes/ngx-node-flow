@@ -1,0 +1,10 @@
+<header>
+  <button type="button" (click)="addMany()">Adicionar 1000 nós</button>
+  <span>{{ nodes().length }} nós · {{ edges().length }} edges · {{ lastEvent() }}</span>
+</header>
+<ngx-node-flow
+  [(nodes)]="nodes"
+  [(edges)]="edges"
+  (nodeClick)="lastEvent.set('click: ' + $event)"
+  (edgeCreated)="lastEvent.set('edge: ' + $event.id)"
+/>

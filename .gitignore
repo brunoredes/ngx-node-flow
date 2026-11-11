@@ -42,3 +42,4 @@ __screenshots__/
 # System files
 .DS_Store
 Thumbs.db
+projects/ngx-node-flow/src/lib/worker-source.ts
