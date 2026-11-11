@@ -1,64 +1,62 @@
-# NgxNodeFlow
+# ngx-node-flow
 
-This project was generated using [Angular CLI](https://github.com/angular/angular-cli) version 22.2.0.
+Interactive flowgraph for Angular. Nodes and edges are drawn with WebGL2 + Canvas 2D on an `OffscreenCanvas` inside a Web Worker.
 
-## Code scaffolding
-
-Angular CLI includes powerful code scaffolding tools. To generate a new component, run:
-
-```bash
-ng generate component component-name
+```ts
+// app.config.ts
+providers: [provideNodeFlow({ grid: { size: 24 } })]
 ```
 
-For a complete list of available schematics (such as `components`, `directives`, or `pipes`), run:
-
-```bash
-ng generate --help
+```html
+<ngx-node-flow [(nodes)]="nodes" [(edges)]="edges">
+  <ng-template nodeFlowEditor let-draft>
+    <!-- your form; `draft` is a WritableSignal<FlowNode>, applied on Save -->
+  </ng-template>
+</ngx-node-flow>
 ```
 
-## Building
+Build with `npm run build:lib` (it bundles the worker first). Pages with a CSP need `worker-src blob:`.
 
-To build the library, run:
+## Theme
 
-```bash
-ng build ngx-node-flow
+The `theme` option is optional. Tokens you leave out use `DEFAULT_NODE_FLOW_THEME`. A value can be any CSS, so you can point it at your design system's tokens:
+
+```ts
+provideNodeFlow({
+  theme: {
+    accent: 'var(--ds-color-primary)',
+    surface: 'var(--ds-color-surface)',
+    fontFamily: 'var(--ds-font-family)',
+    nodeColor: 'light-dark(#e2e8f0, #2d3748)',
+  },
+});
 ```
 
-This command will compile your project, and the build artifacts will be placed in the `dist/` directory.
+Each token has a **public** CSS custom property (`--nf-*`). You can set it in your own CSS, and it overrides the provider:
 
-### Publishing the Library
-
-Once the project is built, you can publish your library by following these steps:
-
-1. Navigate to the `dist` directory:
-
-   ```bash
-   cd dist/ngx-node-flow
-   ```
-
-2. Run the `npm publish` command to publish your library to the npm registry:
-   ```bash
-   npm publish
-   ```
-
-## Running unit tests
-
-To execute unit tests with the [Vitest](https://vitest.dev/) test runner, use the following command:
-
-```bash
-ng test
+```css
+ngx-node-flow { --nf-node-color: var(--ds-color-neutral-200); }
 ```
 
-## Running end-to-end tests
+Precedence: `--nf-*` in your CSS > `theme` in the provider > the library default. Internally the library reads only the **private** properties (`--__nf-*`), defined as `var(--nf-x, <theme value>)`, so they always have a fallback. Do not set the `--__nf-*` properties.
 
-For end-to-end (e2e) testing, run:
+| token | public property | used for |
+|---|---|---|
+| `background` | `--nf-background` | canvas background |
+| `gridColor` | `--nf-grid-color` | grid lines |
+| `nodeColor` | `--nf-node-color` | node body |
+| `nodeSelectedColor` | `--nf-node-selected-color` | selected node |
+| `nodeTextColor` | `--nf-node-text-color` | labels on the canvas |
+| `portColor` | `--nf-port-color` | ports |
+| `edgeColor` | `--nf-edge-color` | edges |
+| `surface` | `--nf-surface` | menu, side sheet, "first node" button |
+| `text` | `--nf-text` | menu and side sheet text |
+| `border` | `--nf-border` | borders and dividers |
+| `accent` | `--nf-accent` | focus ring, primary button |
+| `accentText` | `--nf-accent-text` | text on the accent color |
+| `fontFamily` | `--nf-font-family` | overlays and canvas labels |
+| `radius` | `--nf-radius` | overlay corner radius |
 
-```bash
-ng e2e
-```
+The canvas colors are resolved on the main thread and sent to the worker again whenever the theme may have changed: a `prefers-color-scheme` change, or a change to `class`, `style`, `data-theme` or `data-mode` on `<html>`, `<body>` or the component.
 
-Angular CLI does not come with an end-to-end testing framework by default. You can choose one that suits your needs.
-
-## Additional Resources
-
-For more information on using the Angular CLI, including detailed command references, visit the [Angular CLI Overview and Command Reference](https://angular.dev/tools/cli) page.
+**Limitation:** web fonts loaded by the page are not available inside the worker. Canvas labels fall back to the generic family in your stack (for example `sans-serif`). DOM overlays use the real font.

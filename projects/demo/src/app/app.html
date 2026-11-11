@@ -1,10 +1,24 @@
+@let stats = flow()?.stats();
 <header>
-  <button type="button" (click)="addMany()">Adicionar 1000 nós</button>
-  <span>{{ nodes().length }} nós · {{ edges().length }} edges · {{ lastEvent() }}</span>
+  @if (stats?.loading) {
+    <button type="button" (click)="cancel()">Cancelar</button>
+  } @else {
+    <button type="button" (click)="addMany()">Adicionar 1M nós</button>
+  }
+  <button type="button" (click)="toggleTheme()">Tema: {{ light() ? 'claro' : 'escuro' }}</button>
+  <span aria-live="polite">
+    {{ stats?.nodes ?? 0 }} nós · {{ stats?.edges ?? 0 }} edges
+    @if (stats?.loading) { · carregando… }
+    · {{ lastEvent() }}
+  </span>
 </header>
 <ngx-node-flow
   [(nodes)]="nodes"
   [(edges)]="edges"
   (nodeClick)="lastEvent.set('click: ' + $event)"
   (edgeCreated)="lastEvent.set('edge: ' + $event.id)"
-/>
+>
+  <ng-template nodeFlowEditor let-draft>
+    <app-node-editor [(node)]="draft" />
+  </ng-template>
+</ngx-node-flow>

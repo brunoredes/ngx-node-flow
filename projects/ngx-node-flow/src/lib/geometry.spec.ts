@@ -5,11 +5,11 @@ import { FlowNode } from './types';
 
 describe('provideNodeFlow', () => {
   it('deep-merges options over defaults', () => {
-    TestBed.configureTestingModule({ providers: [provideNodeFlow({ grid: { size: 32 }, edge: { color: 'red' } })] });
+    TestBed.configureTestingModule({ providers: [provideNodeFlow({ grid: { size: 32 }, theme: { edgeColor: 'red' } })] });
     const c = TestBed.inject(NODE_FLOW_CONFIG);
     expect(c.grid).toEqual({ ...cfg.grid, size: 32 });
-    expect(c.edge.color).toBe('red');
-    expect(c.edge.width).toBe(cfg.edge.width);
+    expect(c.theme).toEqual({ ...cfg.theme, edgeColor: 'red' });
+    expect(c.edge).toEqual(cfg.edge);
   });
 
   it('falls back to defaults without a provider', () => {

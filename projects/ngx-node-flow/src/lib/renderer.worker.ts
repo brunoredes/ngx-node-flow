@@ -1,27 +1,27 @@
 /// Runs inside a Worker: owns the canvases, camera and interaction state.
 /// Bundled to a string by scripts/build-worker.mjs (see worker-source.ts).
-import { bezier, Camera, hitTest, nodeHeight, portPos, Side, toWorld, zoomAt } from './geometry';
+import { bezier, Camera, nodeHeight, portPos, Side, toWorld, zoomAt } from './geometry';
 import { GlRenderer, RECT_STRIDE, RGBA } from './gl';
-import { FlowEdge, FlowNode, FromWorker, NodeFlowConfig, ToWorker } from './types';
+import { GraphStore } from './store';
+import { Command, FlowEdge, FlowNode, FromWorker, GraphChanges, GraphChunk, NodeFlowConfig, ResolvedTheme, ToWorker } from './types';
 
 const HEADER_TEXT_Y = 12;
 const PAD = 10;
 
 let cfg: NodeFlowConfig;
+let theme: ResolvedTheme;
 let renderer: GlRenderer;
 let text: OffscreenCanvasRenderingContext2D;
 let glCanvas: OffscreenCanvas;
 let width = 1, height = 1, dpr = 1;
 let cam: Camera = { x: 0, y: 0, zoom: 1 };
-let nodes: FlowNode[] = [];
-let edges: FlowEdge[] = [];
-let byId = new Map<string, FlowNode>();
+let store: GraphStore;
 let selected: string | null = null;
 
 type Drag =
   | { kind: 'pan'; sx: number; sy: number }
   | { kind: 'node'; node: FlowNode; dx: number; dy: number; moved: boolean }
-  | { kind: 'link'; node: FlowNode; side: Side; port: string; wx: number; wy: number };
+  | { kind: 'link'; node: FlowNode; side: Side; port: string; wx: number; wy: number; detached?: FlowEdge };
 let drag: Drag | null = null;
 
 let rects = new Float32Array(0);
@@ -78,17 +78,22 @@ function pushCurve(i: number, pts: number[], halfWidth: number): number {
 
 function render() {
   const c = cfg.node;
-  const portColor = rgba(c.portColor);
+  const portColor = rgba(theme.portColor);
+  // only what is (almost) on screen: margin covers ports and curve control points
+  const tl = toWorld(cam, 0, 0), br = toWorld(cam, width, height);
+  const m = c.width;
+  const visible = store.query(tl.x - m, tl.y - m, br.x + m, br.y + m);
+  const showPorts = cam.zoom >= 0.3;
 
-  let portCount = 0;
-  for (const n of nodes) portCount += (n.inputs?.length ?? 0) + (n.outputs?.length ?? 0);
-  const rectCount = nodes.length + portCount;
+  let rectCount = visible.length;
+  if (showPorts) for (const n of visible) rectCount += (n.inputs?.length ?? 0) + (n.outputs?.length ?? 0);
   if (rects.length < rectCount * RECT_STRIDE) rects = new Float32Array(rectCount * RECT_STRIDE * 2);
 
   let ri = 0;
-  for (const n of nodes) {
-    const color = n.id === selected ? rgba(c.selectedColor) : rgba(n.color ?? c.color);
+  for (const n of visible) {
+    const color = n.id === selected ? rgba(theme.nodeSelectedColor) : rgba(n.color ?? theme.nodeColor);
     pushRect(ri++, n.x, n.y, c.width, nodeHeight(n, cfg), color, c.radius);
+    if (!showPorts) continue;
     for (const side of ['in', 'out'] as const) {
       const names = (side === 'in' ? n.inputs : n.outputs) ?? [];
       for (let p = 0; p < names.length; p++) {
@@ -99,13 +104,15 @@ function render() {
     }
   }
 
-  const SEG = 24, VERTS_PER_CURVE = SEG * 6;
+  // shortcut: edges with no visible endpoint are skipped even if they cross the viewport.
+  const edges = store.edgesOf(visible);
+  const SEG = cam.zoom >= 0.5 ? 24 : 8, VERTS_PER_CURVE = SEG * 6;
   const curveCount = edges.length + (drag?.kind === 'link' ? 1 : 0);
   if (lines.length < curveCount * VERTS_PER_CURVE * 2) lines = new Float32Array(curveCount * VERTS_PER_CURVE * 4);
   let li = 0;
   const hw = cfg.edge.width / 2;
   for (const e of edges) {
-    const s = byId.get(e.source), t = byId.get(e.target);
+    const s = store.node(e.source), t = store.node(e.target);
     if (!s || !t) continue;
     const a = portPos(s, 'out', portIndex(s, 'out', e.sourcePort), cfg);
     const b = portPos(t, 'in', portIndex(t, 'in', e.targetPort), cfg);
@@ -119,28 +126,28 @@ function render() {
 
   renderer.draw({
     width, height, dpr, cam,
-    background: rgba(cfg.background),
-    grid: cfg.grid.visible ? { size: cfg.grid.size, color: rgba(cfg.grid.color) } : null,
+    background: rgba(theme.background),
+    grid: cfg.grid.visible ? { size: cfg.grid.size, color: rgba(theme.gridColor) } : null,
     rects, rectCount: ri,
     lines, lineCount: li,
-    lineColor: rgba(cfg.edge.color),
+    lineColor: rgba(theme.edgeColor),
   });
-  drawText();
+  drawText(visible);
+  reportSelection();
+  reportStats();
 }
 
-function drawText() {
+function drawText(visible: FlowNode[]) {
   text.setTransform(1, 0, 0, 1, 0, 0);
   text.clearRect(0, 0, text.canvas.width, text.canvas.height);
   if (cam.zoom < 0.35) return; // unreadable anyway; skip the cost
   text.setTransform(dpr * cam.zoom, 0, 0, dpr * cam.zoom, dpr * cam.x, dpr * cam.y);
-  text.font = cfg.node.font;
-  text.fillStyle = cfg.node.textColor;
+  text.font = `${cfg.node.fontSize}px ${theme.fontFamily || 'sans-serif'}`;
+  text.fillStyle = theme.nodeTextColor;
   text.textBaseline = 'middle';
-  const tl = toWorld(cam, 0, 0), br = toWorld(cam, width, height);
   const w = cfg.node.width;
   // shortcut: text lives on a layer above all GL shapes, so overlapping nodes show each other's labels.
-  for (const n of nodes) {
-    if (n.x > br.x || n.y > br.y || n.x + w < tl.x || n.y + nodeHeight(n, cfg) < tl.y) continue;
+  for (const n of visible) {
     text.textAlign = 'left';
     text.fillText(n.label, n.x + PAD, n.y + HEADER_TEXT_Y, w - 2 * PAD);
     n.inputs?.forEach((name, i) => text.fillText(name, n.x + PAD, portPos(n, 'in', i, cfg).y, w / 2 - PAD));
@@ -152,12 +159,19 @@ function drawText() {
 function onPointer(kind: 'down' | 'move' | 'up', sx: number, sy: number) {
   const w = toWorld(cam, sx, sy);
   if (kind === 'down') {
-    const hit = hitTest(nodes, w.x, w.y, cfg);
-    if (hit?.port) {
-      drag = { kind: 'link', node: hit.node, side: hit.port.side, port: hit.port.name, wx: w.x, wy: w.y };
+    const hit = store.hit(w.x, w.y);
+    const port = hit?.port;
+    // grabbing a connected input picks up its edge (last one) so it can be reconnected or dropped
+    const existing = port?.side === 'in' ? store.edgeInto(hit!.node.id, port.name) : undefined;
+    const source = existing && store.node(existing.source);
+    if (existing && source) {
+      store.disconnect(existing.id);
+      drag = { kind: 'link', node: source, side: 'out', port: existing.sourcePort, wx: w.x, wy: w.y, detached: existing };
+    } else if (hit && port) {
+      drag = { kind: 'link', node: hit.node, side: port.side, port: port.name, wx: w.x, wy: w.y };
     } else if (hit) {
       // bring to front so it draws (and hit-tests) on top
-      nodes = [...nodes.filter((n) => n !== hit.node), hit.node];
+      store.bringToFront(hit.node.id);
       drag = { kind: 'node', node: hit.node, dx: w.x - hit.node.x, dy: w.y - hit.node.y, moved: false };
     } else {
       selected = null;
@@ -169,8 +183,7 @@ function onPointer(kind: 'down' | 'move' | 'up', sx: number, sy: number) {
       drag.sx = sx;
       drag.sy = sy;
     } else if (drag.kind === 'node') {
-      drag.node.x = w.x - drag.dx;
-      drag.node.y = w.y - drag.dy;
+      store.move(drag.node.id, w.x - drag.dx, w.y - drag.dy);
       drag.moved = true;
     } else {
       drag.wx = w.x;
@@ -179,14 +192,20 @@ function onPointer(kind: 'down' | 'move' | 'up', sx: number, sy: number) {
   } else if (kind === 'up' && drag) {
     if (drag.kind === 'node') {
       selected = drag.node.id;
-      if (drag.moved) send({ type: 'nodeMoved', id: drag.node.id, x: drag.node.x, y: drag.node.y });
+      if (drag.moved) changed({ upsertNodes: [drag.node], removeNodes: [], upsertEdges: [], removeEdges: [] });
       else send({ type: 'nodeClick', id: drag.node.id });
     } else if (drag.kind === 'link') {
-      const hit = hitTest(nodes, w.x, w.y, cfg);
-      const edge = hit?.port && hit.port.side !== drag.side && hit.node !== drag.node && toEdge(drag, hit.node, hit.port.name);
-      if (edge && !edges.some((e) => e.source === edge.source && e.sourcePort === edge.sourcePort && e.target === edge.target && e.targetPort === edge.targetPort)) {
-        edges = [...edges, edge];
-        send({ type: 'edgeCreated', edge });
+      const hit = store.hit(w.x, w.y);
+      const edge = hit?.port && hit.port.side !== drag.side && hit.node !== drag.node ? toEdge(drag, hit.node, hit.port.name) : null;
+      if (drag.detached && edge && sameEdge(drag.detached, edge)) {
+        store.connect(drag.detached); // dropped back where it was
+      } else {
+        if (drag.detached) changed({ upsertNodes: [], removeNodes: [], upsertEdges: [], removeEdges: [drag.detached.id] });
+        const added = edge && store.connect(edge);
+        if (added) {
+          changed(added);
+          send({ type: 'edgeCreated', edge: edge! });
+        }
       }
     }
     drag = null;
@@ -195,6 +214,76 @@ function onPointer(kind: 'down' | 'move' | 'up', sx: number, sy: number) {
   }
   schedule();
 }
+
+const sameEdge = (a: FlowEdge, b: FlowEdge) =>
+  a.source === b.source && a.sourcePort === b.sourcePort && a.target === b.target && a.targetPort === b.targetPort;
+
+let lastSelection = '';
+/** Sends the selected node's screen rect whenever it changes, so the DOM menu can follow it. */
+function reportSelection() {
+  const n = selected ? store.node(selected) : undefined;
+  const msg: FromWorker = n
+    ? { type: 'selection', id: n.id, x: n.x * cam.zoom + cam.x, y: n.y * cam.zoom + cam.y, w: cfg.node.width * cam.zoom, h: nodeHeight(n, cfg) * cam.zoom }
+    : { type: 'selection', id: null, x: 0, y: 0, w: 0, h: 0 };
+  const key = JSON.stringify(msg);
+  if (key !== lastSelection) {
+    lastSelection = key;
+    send(msg);
+  }
+}
+
+let lastStats = '';
+function reportStats() {
+  const key = `${store.nodes.size},${store.edges.size}`;
+  if (key === lastStats) return;
+  lastStats = key;
+  send({ type: 'stats', nodes: store.nodes.size, edges: store.edges.size });
+}
+
+function changed(changes: GraphChanges) {
+  if (selected && !store.node(selected)) selected = null;
+  if (!store.nodes.size) cam = { x: 0, y: 0, zoom: 1 };
+  send({ type: 'changes', changes });
+  schedule();
+}
+
+function run(command: Command): unknown {
+  switch (command.op) {
+    case 'getNode':
+      return store.node(command.id);
+    case 'addAfter':
+      changed(store.addAfter(command.id));
+      return;
+    case 'remove':
+      changed(store.remove(command.id));
+      return;
+    case 'upsertNode':
+      changed(store.upsertNode(command.node));
+      return;
+    case 'chunk':
+      store.addChunk(command.chunk);
+      schedule();
+      return;
+  }
+}
+
+/** Streamed chunks land through a WritableStream, so a slow worker back-pressures the producer. */
+function ingest(stream: ReadableStream<GraphChunk>): Promise<void> {
+  return stream.pipeTo(
+    new WritableStream<GraphChunk>(
+      {
+        write(chunk) {
+          store.addChunk(chunk);
+          schedule();
+        },
+      },
+      new CountQueuingStrategy({ highWaterMark: 4 }),
+    ),
+  );
+}
+
+const reply = (reqId: number, value?: unknown) => send({ type: 'reply', reqId, value });
+const fail = (reqId: number, err: unknown) => send({ type: 'reply', reqId, error: err instanceof Error ? `${err.name}: ${err.message}` : String(err) });
 
 function toEdge(d: Extract<Drag, { kind: 'link' }>, other: FlowNode, otherPort: string): FlowEdge {
   const [s, sp, t, tp] = d.side === 'out' ? [d.node, d.port, other, otherPort] : [other, otherPort, d.node, d.port];
@@ -206,10 +295,12 @@ addEventListener('message', (e: MessageEvent<ToWorker>) => {
   switch (m.type) {
     case 'init': {
       cfg = m.config;
+      theme = m.theme;
       glCanvas = m.gl;
       const gl = m.gl.getContext('webgl2', { antialias: true, premultipliedAlpha: true });
       if (!gl) throw new Error('ngx-node-flow: WebGL2 not available');
       renderer = new GlRenderer(gl);
+      store = new GraphStore(cfg);
       text = m.text.getContext('2d')!;
       break;
     }
@@ -220,14 +311,26 @@ addEventListener('message', (e: MessageEvent<ToWorker>) => {
         c.height = Math.max(1, Math.round(height * dpr));
       }
       break;
-    case 'data': {
-      // keep the locally dragged node's live position until the drag ends
-      const d = drag?.kind === 'node' ? drag.node : null;
-      nodes = d ? m.nodes.map((n) => (n.id === d.id ? d : n)) : m.nodes;
-      edges = m.edges;
-      byId = new Map(nodes.map((n) => [n.id, n]));
+    case 'data':
+      store.reset(m.nodes, m.edges);
+      drag = null; // dragged objects were replaced
+      if (selected && !store.node(selected)) selected = null;
+      if (!store.nodes.size) cam = { x: 0, y: 0, zoom: 1 };
       break;
-    }
+    case 'command':
+      try {
+        reply(m.reqId, run(m.command));
+      } catch (err) {
+        fail(m.reqId, err);
+      }
+      return;
+    case 'stream':
+      ingest(m.stream).then(() => reply(m.reqId), (err) => fail(m.reqId, err));
+      return;
+    case 'theme':
+      theme = m.theme;
+      colorCache.clear();
+      break;
     case 'pointer':
       return onPointer(m.kind, m.x, m.y);
     case 'wheel':

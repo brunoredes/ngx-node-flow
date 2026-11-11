@@ -1,1 +1,14 @@
+/* Stand-in for a design system's tokens. */
+:root {
+  color-scheme: dark;
+  --demo-accent: #f6ad55;
+  --demo-surface: #2d3748;
+  --demo-canvas: #1a1d23;
+}
+:root[data-theme='light'] {
+  color-scheme: light;
+  --demo-accent: #dd6b20;
+  --demo-surface: #ffffff;
+  --demo-canvas: #f7fafc;
+}
 body { margin: 0; }

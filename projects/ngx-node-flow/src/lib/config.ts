@@ -1,33 +1,40 @@
 import { InjectionToken, makeEnvironmentProviders } from '@angular/core';
-import { NodeFlowConfig, NodeFlowOptions } from './types';
+import { NodeFlowConfig, NodeFlowOptions, NodeFlowTheme } from './types';
+
+export const DEFAULT_NODE_FLOW_THEME: NodeFlowTheme = {
+  background: '#1a1d23',
+  gridColor: '#2a2e36',
+  nodeColor: '#2d3748',
+  nodeSelectedColor: '#4a6fa5',
+  nodeTextColor: '#e2e8f0',
+  portColor: '#a0aec0',
+  edgeColor: '#718096',
+  surface: '#2d3748',
+  text: '#e2e8f0',
+  border: '#ffffff33',
+  accent: '#63b3ed',
+  accentText: '#1a202c',
+  fontFamily: 'system-ui, sans-serif',
+  radius: '8px',
+};
 
 export const DEFAULT_NODE_FLOW_CONFIG: NodeFlowConfig = {
-  background: '#1a1d23',
-  grid: { size: 20, color: '#2a2e36', visible: true },
-  node: {
-    width: 160,
-    height: 60,
-    color: '#2d3748',
-    selectedColor: '#4a6fa5',
-    textColor: '#e2e8f0',
-    radius: 8,
-    font: '13px sans-serif',
-    portRadius: 6,
-    portColor: '#a0aec0',
-  },
-  edge: { color: '#718096', width: 2 },
+  grid: { size: 20, visible: true },
+  node: { width: 160, height: 60, radius: 8, portRadius: 6, fontSize: 13 },
+  edge: { width: 2 },
   zoom: { min: 0.1, max: 4 },
+  theme: DEFAULT_NODE_FLOW_THEME,
 };
 
 export function mergeConfig(options: NodeFlowOptions): NodeFlowConfig {
   const d = DEFAULT_NODE_FLOW_CONFIG;
   return {
-    background: options.background ?? d.background,
     grid: { ...d.grid, ...options.grid },
     node: { ...d.node, ...options.node },
     edge: { ...d.edge, ...options.edge },
     zoom: { ...d.zoom, ...options.zoom },
-  } as NodeFlowConfig;
+    theme: { ...d.theme, ...options.theme },
+  };
 }
 
 export const NODE_FLOW_CONFIG = new InjectionToken<NodeFlowConfig>('NODE_FLOW_CONFIG', {
@@ -35,6 +42,7 @@ export const NODE_FLOW_CONFIG = new InjectionToken<NodeFlowConfig>('NODE_FLOW_CO
   factory: () => DEFAULT_NODE_FLOW_CONFIG,
 });
 
+/** `theme` is optional: omitted tokens fall back to DEFAULT_NODE_FLOW_THEME. */
 export function provideNodeFlow(options: NodeFlowOptions = {}) {
   return makeEnvironmentProviders([{ provide: NODE_FLOW_CONFIG, useValue: mergeConfig(options) }]);
 }
