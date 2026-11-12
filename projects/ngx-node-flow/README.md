@@ -17,12 +17,45 @@ providers: [provideNodeFlow({ grid: { size: 24 } })]
 
 The worker is the single source of truth. `nodes`/`edges` are the initial graph: edits are never written back to them, and setting a new array replaces the whole graph (including what `load()` streamed in). To keep your own copy, fold each `graphChange` with `applyChanges(nodes, edges, change)`.
 
+Ports are objects: `{ id, label?, type?, maxConnections? }`. Edges reference the port `id`, so a label can change without dropping edges.
+
 Policy is yours, not the library's:
 
-- `[createNode]="() => ({ label: 'Step', inputs: ['in'], outputs: ['out'] })"` builds nodes added from the menu (id and position are assigned for you).
-- `[beforeRemove]="confirmRemove"` runs before a removal; return `false` (or a promise of it) to keep the node.
-- `provideNodeFlow({ edge: { allowCycles: false } })` refuses a connection dragged by the user when it would close a cycle (a picked-up edge goes back where it was) and emits `(edgeRejected)` with an `EdgeRejectedError` carrying the `edge` and the `reason`, so the app can tell the user. Graphs passed in or streamed by `load()` are not checked. The check walks what is downstream of the target, so on a single 1M-node ring it costs about 15 ms per drop.
+- `[createNode]="() => ({ label: 'Step', inputs: [{ id: 'in' }], outputs: [{ id: 'out' }] })"` builds nodes added from the menu (id and position are assigned for you).
+- `[beforeRemove]="confirmRemove"` runs before a removal (menu or Delete key, once per node); return `false` (or a promise of it) to keep the node.
+- Connection rules, checked when the user drops an edge (a picked-up edge goes back where it was). Each refusal emits `(edgeRejected)` with an `EdgeRejectedError` carrying the `edge` and the `reason`. Graphs passed in or streamed by `load()` are not checked.
+  - `provideNodeFlow({ edge: { compatibility: { number: ['number', 'any'] } } })` maps an output port `type` to the input types it may feed. Untyped ports, and types missing from the map, connect to anything. While dragging, ports the edge cannot land on are dimmed. Reason: `'type'`.
+  - `maxConnections` on a port caps its edges. Reason: `'maxConnections'`.
+  - `edge: { allowCycles: false }` refuses an edge that would close a cycle. The check walks what is downstream of the target, so on a single 1M-node ring it costs about 15 ms per drop. Reason: `'cycle'`.
+  - `[canConnect]="(edge) => boolean | Promise<boolean>"` gets the last word after the rules above, once per drop. Reason: `'custom'`.
+- `[readonly]="true"` keeps pan, zoom and selection but blocks every edit. `locked: true` on a node keeps it from being dragged or removed.
 - `provideNodeFlow({ labels: { ... } })` sets the UI strings (defaults are English, see `NodeFlowLabels`).
+
+Imperative API (on the component instance, e.g. via `viewChild(NodeFlow)`):
+
+| method | does |
+|---|---|
+| `snapshot()` | resolves the whole graph as `{ nodes, edges }`: persist without folding every `graphChange` |
+| `fitView({ padding? })`, `centerOn(id)`, `zoomTo(zoom)` | moves the camera |
+| `select(ids)` | selects nodes (`[]` clears); `(selectionChange)` reports `{ nodes, edges }` |
+| `undo()`, `redo()`, `canUndo()`, `canRedo()` | history of the last 100 user actions, kept in the worker; undo/redo report through `graphChange`. Replacing `nodes`/`edges` clears it |
+| `load(source)` | streams a large graph in chunks |
+
+Selection and keyboard: click selects; Shift/Ctrl/Cmd+click toggles; Shift+drag on empty space draws a selection rectangle; dragging a selected node moves the whole selection; clicking an edge selects it. The component is one focusable widget (`role="application"`, described by `labels.keyboardHelp`), and a live region announces the focused node:
+
+| key | action |
+|---|---|
+| arrows | focus and select the nearest node in that direction (Ctrl/Cmd+arrows: focus only) |
+| Space | add/remove the focused node from the selection |
+| Shift+arrows | move the selection by one grid step |
+| Enter | edit the focused node |
+| Delete / Backspace | remove the selection |
+| C, then arrows, then Enter | connect the first compatible free output of the first node to an input of the second |
+| Ctrl+Z, Ctrl+Shift+Z / Ctrl+Y | undo, redo |
+| Ctrl+A, Ctrl+C, Ctrl+V, Ctrl+D | select all, copy, paste, duplicate |
+| Escape | clear the selection, cancel connect mode |
+
+Tab leaves the canvas (into the node menu, then out), so it is never a keyboard trap. Copy writes JSON to the clipboard, and paste only accepts that format, validated before it reaches the graph.
 
 Build with `npm run build:lib` (it bundles the worker first). Pages with a CSP need `worker-src blob:`.
 

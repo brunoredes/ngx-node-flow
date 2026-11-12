@@ -68,3 +68,14 @@ export function bezier(ax: number, ay: number, bx: number, by: number, segments 
   }
   return pts;
 }
+
+/** Shortest distance from (x, y) to a polyline given as flat [x0, y0, x1, y1, ...]. */
+export function distToPolyline(pts: number[], x: number, y: number): number {
+  let best = Infinity;
+  for (let i = 0; i + 3 < pts.length; i += 2) {
+    const ax = pts[i], ay = pts[i + 1], dx = pts[i + 2] - ax, dy = pts[i + 3] - ay;
+    const t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy || 1)));
+    best = Math.min(best, Math.hypot(ax + t * dx - x, ay + t * dy - y));
+  }
+  return best;
+}

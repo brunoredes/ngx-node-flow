@@ -1,6 +1,6 @@
 import { DEFAULT_NODE_FLOW_CONFIG as cfg } from './config';
 import { nodeHeight } from './geometry';
-import { applyChanges, GraphStore, typesMatch } from './store';
+import { applyChanges, cloneGraph, GraphStore, typesMatch } from './store';
 import { FlowEdge, FlowNode } from './types';
 
 const a = (): FlowNode => ({ id: 'a', x: 0, y: 0, label: 'A', outputs: [{ id: 'o1' }, { id: 'o2' }] });
@@ -275,6 +275,21 @@ describe('transactions', () => {
     const step = s.end()!;
     expect(step.undo.upsertEdges).toEqual([ab]);
     expect(step.redo.upsertEdges).toEqual([{ ...ab, sourcePort: 'o2' }]);
+  });
+});
+
+describe('copy and paste', () => {
+  it('subgraph keeps only the edges between the picked nodes', () => {
+    const g = store().subgraph(['a', 'b', 'missing']);
+    expect(g.nodes.map((n) => n.id)).toEqual(['a', 'b']);
+    expect(g.edges).toEqual([ab]);
+  });
+
+  it('cloneGraph remaps ids, shifts positions and drops dangling edges', () => {
+    let i = 0;
+    const g = cloneGraph({ nodes: [a(), b()], edges: [ab, bc] }, 10, 20, () => `n${++i}`);
+    expect(g.nodes.map((n) => [n.id, n.x, n.y])).toEqual([['n1', 10, 20], ['n2', 310, 20]]);
+    expect(g.edges).toEqual([{ id: 'n1:o1->n2:in', source: 'n1', sourcePort: 'o1', target: 'n2', targetPort: 'in' }]);
   });
 });
 

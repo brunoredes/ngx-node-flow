@@ -35,6 +35,15 @@ export const DEFAULT_NODE_FLOW_CONFIG: NodeFlowConfig = {
     name: 'Name',
     discard: 'Discard',
     save: 'Save',
+    keyboardHelp:
+      'Arrow keys move between nodes; Ctrl+arrows move without selecting. Space adds or removes the node from the selection. ' +
+      'Shift+arrows move the selection, Enter edits, Delete removes. C, then arrows and Enter, connects two nodes. ' +
+      'Ctrl+Z undoes, Ctrl+Y redoes, Ctrl+A selects all, Ctrl+C, Ctrl+V and Ctrl+D copy, paste and duplicate. Escape clears the selection.',
+    selected: 'selected',
+    connectFrom: 'Connecting: pick the target node with the arrow keys and press Enter, or Escape to cancel',
+    connectTo: 'Connect to',
+    connected: 'Connected',
+    noConnection: 'No compatible free ports between these nodes',
   },
 };
 

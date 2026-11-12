@@ -20,6 +20,7 @@ import { resolveTheme, themeStyles, watchTheme } from './theme';
 import { iterate, toReadableStream } from './stream';
 import { NodeFlowEditor } from './node-flow-editor';
 import { EdgeRejectedError } from './errors';
+import { parseClipboard, toClipboard } from './clipboard';
 import { Command, FlowEdge, FlowNode, FromWorker, GraphChanges, GraphChunk, GraphSnapshot, NewFlowNode, NodeFlowTheme, ToWorker } from './types';
 import { WORKER_SOURCE } from './worker-source';
 
@@ -29,8 +30,10 @@ type Selection = Extract<FromWorker, { type: 'selection' }> & { id: string };
   selector: 'ngx-node-flow',
   imports: [NgTemplateOutlet],
   template: `
-    <canvas #gl role="img" [attr.aria-label]="l.canvas"></canvas><canvas #text aria-hidden="true"></canvas>
+    <canvas #gl aria-hidden="true"></canvas><canvas #text aria-hidden="true"></canvas>
     <span #probe hidden></span>
+    <p class="nf-sr" [id]="helpId">{{ l.keyboardHelp }}</p>
+    <p class="nf-sr" aria-live="polite">{{ announcement() }}</p>
 
     @if (!draft() && !readonly() && selection(); as s) {
       <div
@@ -99,7 +102,9 @@ type Selection = Extract<FromWorker, { type: 'selection' }> & { id: string };
     }
   `,
   styles: `
-    :host { display: block; position: relative; overflow: hidden; touch-action: none; user-select: none; background: var(--__nf-background); }
+    :host { display: block; position: relative; overflow: hidden; touch-action: none; user-select: none; background: var(--__nf-background); outline: none; }
+    :host(:focus-visible) { box-shadow: inset 0 0 0 2px var(--__nf-accent); }
+    .nf-sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
     canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
     canvas + canvas { pointer-events: none; }
     .nf-overlay { position: absolute; color: var(--__nf-text); background: var(--__nf-surface); font: 14px var(--__nf-font-family); }
@@ -123,6 +128,13 @@ type Selection = Extract<FromWorker, { type: 'selection' }> & { id: string };
   `,
   host: {
     '[style]': 'themeStyles',
+    // the canvas is one focusable widget: keys move a virtual focus between nodes (see key())
+    tabindex: '0',
+    role: 'application',
+    '[attr.aria-label]': 'l.canvas',
+    '[attr.aria-describedby]': 'helpId',
+    '(keydown)': 'key($event)',
+    '(paste)': 'paste($event)',
     '(pointerdown)': 'pointer($event, "down")',
     '(pointermove)': 'pointer($event, "move")',
     '(pointerup)': 'pointer($event, "up")',
@@ -156,6 +168,8 @@ export class NodeFlow {
   readonly edgeRejected = output<EdgeRejectedError>();
   /** Every change to the worker-owned graph (moves, edits, connections), for persistence. */
   readonly graphChange = output<GraphChanges>();
+  /** The selected node and edge ids, whenever the selection changes. */
+  readonly selectionChange = output<{ nodes: string[]; edges: string[] }>();
   /** The renderer could not start (e.g. no WebGL2) or the worker crashed. */
   readonly error = output<Error>();
 
@@ -173,7 +187,17 @@ export class NodeFlow {
   /** The draft is a node not yet in the graph (first-node flow). */
   protected readonly isNew = signal(false);
   private static instances = 0;
-  protected readonly titleId = `nf-sheet-title-${NodeFlow.instances++}`;
+  private readonly uid = NodeFlow.instances++;
+  protected readonly titleId = `nf-sheet-title-${this.uid}`;
+  protected readonly helpId = `nf-help-${this.uid}`;
+  /** Live region text: the keyboard-focused node, or the result of a keyboard action. */
+  protected readonly announcement = signal('');
+  private focusedId: string | null = null;
+  private selectedIds = { nodes: [] as string[], edges: [] as string[] };
+  /** Keyboard connect mode: the node the new edge starts from. */
+  private connectFrom: string | null = null;
+  /** A keyboard connection waits for canConnect; its outcome is announced when it arrives. */
+  private keyboardConnect = false;
   /** Active pointers (CSS px), tracked to turn two touches into a pinch zoom. */
   private readonly pointers = new Map<number, { x: number; y: number }>();
 
@@ -438,7 +462,7 @@ export class NodeFlow {
       this.host.setPointerCapture(e.pointerId);
       this.pointers.set(e.pointerId, p);
       // second touch: drop whatever the first one was dragging, the pinch takes over
-      if (this.pointers.size === 2) return this.post({ type: 'pointer', kind: 'cancel', ...p });
+      if (this.pointers.size === 2) return this.post({ type: 'pointer', kind: 'cancel', ...p, toggle: false });
     } else if (kind === 'move' && prev) {
       this.pointers.set(e.pointerId, p);
       if (this.pointers.size === 2) {
@@ -451,7 +475,7 @@ export class NodeFlow {
       this.pointers.delete(e.pointerId);
       if (pinching) return; // the drag was already cancelled when the pinch began
     }
-    this.post({ type: 'pointer', kind, ...p });
+    this.post({ type: 'pointer', kind, ...p, toggle: e.shiftKey || e.ctrlKey || e.metaKey });
   }
 
   protected wheel(e: WheelEvent) {
@@ -488,19 +512,133 @@ export class NodeFlow {
         this.nodeClick.emit(m.id);
         break;
       case 'edgeCreated':
+        this.settleKeyboardConnect(this.l.connected);
         this.edgeCreated.emit(m.edge);
         break;
       case 'connectRequest':
         void this.answerConnect(m.edge);
         break;
       case 'edgeRejected':
+        this.settleKeyboardConnect(this.l.noConnection);
         this.edgeRejected.emit(new EdgeRejectedError(m.edge, m.reason));
         break;
       case 'selection':
         this.selection.set(m.id === null ? null : (m as Selection));
         break;
+      case 'selected':
+        this.selectedIds = { nodes: m.nodes, edges: m.edges };
+        this.selectionChange.emit(this.selectedIds);
+        break;
+      case 'focus':
+        this.focusedId = m.id;
+        if (m.id) this.announcement.set(this.connectFrom ? `${this.l.connectTo} ${m.label}` : m.selected ? `${m.label}, ${this.l.selected}` : m.label);
+        break;
     }
   }
+
+  // --- keyboard ------------------------------------------------------------------
+
+  protected key(e: KeyboardEvent) {
+    // keys typed in the menu or the sheet belong to them
+    if (e.target !== this.host || this.draft()) return;
+    if (this.shortcut(e)) e.preventDefault();
+  }
+
+  /** Runs the shortcut for `e`; false when the key is not one of ours (let the browser have it). */
+  private shortcut(e: KeyboardEvent): boolean {
+    const mod = e.ctrlKey || e.metaKey, k = e.key.toLowerCase(), edit = !this.readonly();
+    const dir = ARROWS[e.key];
+    if (dir && e.shiftKey && !mod && edit) {
+      const [dx, dy] = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] }[dir];
+      const step = this.config.grid.size;
+      void this.command({ op: 'moveSelection', dx: dx * step, dy: dy * step });
+    } else if (dir) {
+      void this.command({ op: 'focusNext', dir, keep: mod || !!this.connectFrom });
+    } else if (mod && k === 'a') {
+      void this.command({ op: 'selectAll' });
+    } else if (mod && (k === 'y' || (k === 'z' && e.shiftKey))) {
+      void this.redo();
+    } else if (mod && k === 'z') {
+      void this.undo();
+    } else if (mod && k === 'c') {
+      void this.copy();
+    } else if (mod && k === 'd' && edit) {
+      void this.command({ op: 'duplicate' });
+    } else if (mod) {
+      return false; // Ctrl+V and browser shortcuts
+    } else if (e.key === ' ') {
+      void this.command({ op: 'toggleFocused' });
+    } else if (e.key === 'Enter') {
+      if (this.connectFrom) void this.finishConnect();
+      else if (this.focusedId && edit) void this.edit(this.focusedId);
+    } else if ((e.key === 'Delete' || e.key === 'Backspace') && edit) {
+      void this.removeSelected();
+    } else if (e.key === 'Escape') {
+      if (this.connectFrom) this.connectFrom = null;
+      else void this.select([]);
+      this.post({ type: 'pointer', kind: 'cancel', x: 0, y: 0, toggle: false });
+      this.announcement.set('');
+    } else if (k === 'c' && this.focusedId && edit) {
+      this.connectFrom = this.focusedId;
+      this.announcement.set(this.l.connectFrom);
+    } else {
+      return false;
+    }
+    return true;
+  }
+
+  private settleKeyboardConnect(text: string) {
+    if (!this.keyboardConnect) return;
+    this.keyboardConnect = false;
+    this.announcement.set(text);
+  }
+
+  private async finishConnect() {
+    const from = this.connectFrom, to = this.focusedId;
+    this.connectFrom = null;
+    const found = !!from && !!to && (await this.command<boolean>({ op: 'connectNodes', from, to }));
+    if (!found) this.announcement.set(this.l.noConnection);
+    else if (this.canConnect()) this.keyboardConnect = true; // announced on edgeCreated / edgeRejected
+    else this.announcement.set(this.l.connected);
+  }
+
+  /** Removes every selected node and edge; beforeRemove runs per node, and locked nodes stay. */
+  private async removeSelected() {
+    const { nodes, edges } = this.selectedIds;
+    const keep = [];
+    for (const id of nodes) {
+      const node = await this.command<FlowNode | undefined>({ op: 'getNode', id });
+      if (node && !node.locked && (await this.beforeRemove()?.(node)) !== false) keep.push(id);
+    }
+    await this.command({ op: 'removeMany', nodes: keep, edges });
+    if (this.draft() && keep.includes(this.draft()!().id)) this.close();
+  }
+
+  private async copy() {
+    const graph = await this.command<GraphSnapshot>({ op: 'copy' });
+    if (!graph.nodes.length) return;
+    try {
+      await navigator.clipboard.writeText(toClipboard(graph));
+    } catch (err) {
+      console.warn('ngx-node-flow: clipboard write refused', err); // e.g. permission denied; nothing to undo
+    }
+  }
+
+  /** Paste arrives as an event (no clipboard permission prompt); only our own format is accepted. */
+  protected paste(e: ClipboardEvent) {
+    if (e.target !== this.host || this.draft() || this.readonly()) return;
+    const graph = parseClipboard(e.clipboardData?.getData('text/plain') ?? '');
+    if (!graph) return;
+    e.preventDefault();
+    void this.command({ op: 'paste', graph });
+  }
 }
+
+const ARROWS: Partial<Record<string, 'left' | 'right' | 'up' | 'down'>> = {
+  ArrowLeft: 'left',
+  ArrowRight: 'right',
+  ArrowUp: 'up',
+  ArrowDown: 'down',
+};
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;

@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { DEFAULT_NODE_FLOW_CONFIG as cfg, NODE_FLOW_CONFIG, provideNodeFlow } from './config';
-import { bezier, hitTest, portPos, toWorld, zoomAt } from './geometry';
+import { bezier, distToPolyline, hitTest, portPos, toWorld, zoomAt } from './geometry';
 import { FlowNode } from './types';
 
 describe('provideNodeFlow', () => {
@@ -46,5 +46,18 @@ describe('geometry', () => {
     expect(p.length).toBe(18);
     expect(p.slice(0, 2)).toEqual([0, 0]);
     expect(p.slice(-2)).toEqual([100, 40]);
+  });
+});
+
+describe('distToPolyline', () => {
+  it('measures to the nearest segment, clamped to its ends', () => {
+    const pts = [0, 0, 10, 0, 10, 10];
+    expect(distToPolyline(pts, 5, 3)).toBe(3);
+    expect(distToPolyline(pts, 13, 5)).toBe(3);
+    expect(distToPolyline(pts, -4, 3)).toBe(5);
+  });
+
+  it('handles a degenerate segment', () => {
+    expect(distToPolyline([1, 1, 1, 1], 4, 5)).toBe(5);
   });
 });

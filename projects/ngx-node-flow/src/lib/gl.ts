@@ -78,6 +78,9 @@ export interface Frame {
   lines: Float32Array;
   lineCount: number;
   lineColor: RGBA;
+  /** Line vertices from this index on are drawn in accentColor (selected edges). */
+  accentFrom: number;
+  accentColor: RGBA;
 }
 
 export class GlRenderer {
@@ -165,11 +168,13 @@ export class GlRenderer {
 
     if (f.lineCount) {
       this.use(this.line, f);
-      gl.uniform4fv(this.u(this.line, 'uColor'), f.lineColor);
       gl.bindVertexArray(this.lineVao);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.lineBuf);
       gl.bufferData(gl.ARRAY_BUFFER, f.lines.subarray(0, f.lineCount * 2), gl.DYNAMIC_DRAW);
-      gl.drawArrays(gl.TRIANGLES, 0, f.lineCount);
+      gl.uniform4fv(this.u(this.line, 'uColor'), f.lineColor);
+      if (f.accentFrom) gl.drawArrays(gl.TRIANGLES, 0, f.accentFrom);
+      gl.uniform4fv(this.u(this.line, 'uColor'), f.accentColor);
+      if (f.lineCount > f.accentFrom) gl.drawArrays(gl.TRIANGLES, f.accentFrom, f.lineCount - f.accentFrom);
     }
 
     if (f.rectCount) {

@@ -1,5 +1,5 @@
 import { hitTest, Hit, nodeHeight } from './geometry';
-import { EdgeRejectReason, FlowEdge, FlowNode, FlowPort, GraphChanges, GraphChunk, NodeFlowConfig } from './types';
+import { EdgeRejectReason, FlowEdge, FlowNode, FlowPort, GraphChanges, GraphChunk, GraphSnapshot, NodeFlowConfig } from './types';
 
 const CELL = 1024;
 const GAP = 80;
@@ -309,6 +309,32 @@ export class GraphStore {
     return hits.map((s) => this.mat(s));
   }
 
+  hasEdge(id: string): boolean {
+    return this.eIdx.has(id);
+  }
+
+  /** The given nodes (missing ids skipped) and only the edges running between them. */
+  subgraph(ids: Iterable<string>): GraphSnapshot {
+    const nodes: FlowNode[] = [], edges: FlowEdge[] = [];
+    const inside = new Set<number>();
+    for (const id of ids) {
+      const s = this.nIdx.get(id);
+      if (s !== undefined && this.nAlive[s]) inside.add(s);
+    }
+    for (const s of inside) {
+      nodes.push(this.mat(s));
+      this.out[s]?.forEach((e) => inside.has(this.eDst[e]) && edges.push(this.matEdge(e)));
+    }
+    return { nodes, edges };
+  }
+
+  /** Ids of every live node. */
+  ids(): string[] {
+    const ids: string[] = [];
+    for (let s = 0; s < this.nId.length; s++) if (this.nAlive[s]) ids.push(this.nId[s]);
+    return ids;
+  }
+
   /** Edges touching any of `nodes`, each once. */
   edgesOf(nodes: Iterable<FlowNode>): FlowEdge[] {
     const seen = new Set<number>();
@@ -506,4 +532,18 @@ export function typesMatch(out: FlowPort, inp: FlowPort, compatibility: Record<s
   if (!compatibility || out.type === undefined || inp.type === undefined) return true;
   const allowed = compatibility[out.type];
   return !allowed || allowed.includes(inp.type);
+}
+
+/**
+ * A copy of `g` with fresh node ids, shifted by (dx, dy). Edges keep their ports and follow the new ids;
+ * edges with an endpoint outside `g` are dropped.
+ */
+export function cloneGraph(g: GraphSnapshot, dx: number, dy: number, newId: () => string = () => crypto.randomUUID()): GraphSnapshot {
+  const ids = new Map(g.nodes.map((n) => [n.id, newId()]));
+  const nodes = g.nodes.map((n) => ({ ...n, id: ids.get(n.id)!, x: n.x + dx, y: n.y + dy }));
+  const edges = g.edges.flatMap((e) => {
+    const source = ids.get(e.source), target = ids.get(e.target);
+    return source && target ? [{ ...e, id: `${source}:${e.sourcePort}->${target}:${e.targetPort}`, source, target }] : [];
+  });
+  return { nodes, edges };
 }

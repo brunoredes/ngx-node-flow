@@ -1,12 +1,14 @@
 /// Runs inside a Worker: owns the canvases, camera and interaction state.
 /// Bundled to a string by scripts/build-worker.mjs (see worker-source.ts).
-import { bezier, Camera, nodeHeight, portPos, Side, toWorld, zoomAt } from './geometry';
+import { bezier, Camera, distToPolyline, nodeHeight, portPos, Side, toWorld, zoomAt } from './geometry';
 import { GlRenderer, RECT_STRIDE, RGBA } from './gl';
-import { GraphStore, noChanges } from './store';
-import { Command, FlowEdge, FlowNode, FromWorker, GraphChanges, GraphChunk, NodeFlowConfig, ResolvedTheme, ToWorker } from './types';
+import { cloneGraph, GraphStore, noChanges } from './store';
+import { Command, FlowEdge, FlowNode, FromWorker, GraphChanges, GraphChunk, GraphSnapshot, NodeFlowConfig, ResolvedTheme, ToWorker } from './types';
 
 const HEADER_TEXT_Y = 12;
 const PAD = 10;
+/** Offset of pasted / duplicated nodes from their originals (world px). */
+const PASTE_OFFSET = 40;
 
 let cfg: NodeFlowConfig;
 let theme: ResolvedTheme;
@@ -16,21 +18,31 @@ let glCanvas: OffscreenCanvas;
 let width = 1, height = 1, dpr = 1;
 let cam: Camera = { x: 0, y: 0, zoom: 1 };
 let store: GraphStore;
-let selected: string | null = null;
 let readonly = false;
 /** The consumer set a canConnect input: drops wait for its answer. */
 let canConnect = false;
 let pendingLink: { edge: FlowEdge; detached?: FlowEdge } | null = null;
 
+// selection; selVersion bumps on every change so the id lists are only sent when they changed
+let selNodes = new Set<string>();
+let selEdges = new Set<string>();
+let selVersion = 0;
+/** Keyboard focus. Drawn (and announced) only after a keyboard command, not on clicks. */
+let focused: string | null = null;
+let focusVisible = false;
+
 type Drag =
   | { kind: 'pan'; sx: number; sy: number }
-  /** fixed: selectable but not movable (readonly view or locked node). */
-  | { kind: 'node'; node: FlowNode; dx: number; dy: number; moved: boolean; fixed: boolean }
+  | { kind: 'marquee'; x0: number; y0: number; x1: number; y1: number }
+  /** group: nodes that move with the pointer and where they started (empty when readonly or all locked). */
+  | { kind: 'node'; node: FlowNode; toggle: boolean; sx: number; sy: number; group: { id: string; x: number; y: number }[]; moved: boolean }
   | { kind: 'link'; node: FlowNode; side: Side; port: string; wx: number; wy: number; detached?: FlowEdge };
 let drag: Drag | null = null;
 
 let rects = new Float32Array(0);
 let lines = new Float32Array(0);
+/** Edges drawn in the last frame: what a click can hit. */
+let drawnEdges: FlowEdge[] = [];
 
 const send = (msg: FromWorker) => postMessage(msg);
 
@@ -51,8 +63,19 @@ function rgba(css: string): RGBA {
   return c;
 }
 
+const withAlpha = (c: RGBA, a: number): RGBA => [c[0], c[1], c[2], c[3] * a];
+
 function portIndex(n: FlowNode, side: Side, id: string) {
   return ((side === 'in' ? n.inputs : n.outputs) ?? []).findIndex((p) => p.id === id);
+}
+
+/** The edge's curve as a polyline, or null if an endpoint is missing. */
+function curve(e: FlowEdge, segments: number): number[] | null {
+  const s = store.node(e.source), t = store.node(e.target);
+  if (!s || !t) return null;
+  const a = portPos(s, 'out', portIndex(s, 'out', e.sourcePort), cfg);
+  const b = portPos(t, 'in', portIndex(t, 'in', e.targetPort), cfg);
+  return bezier(a.x, a.y, b.x, b.y, segments);
 }
 
 let scheduled = false;
@@ -100,23 +123,29 @@ function pushCurve(i: number, pts: number[], halfWidth: number): number {
 function render() {
   const c = cfg.node;
   const portColor = rgba(theme.portColor);
+  const accent = rgba(theme.accent);
   // only what is (almost) on screen: margin covers ports and curve control points
   const tl = toWorld(cam, 0, 0), br = toWorld(cam, width, height);
   const m = c.width;
   const visible = store.query(tl.x - m, tl.y - m, br.x + m, br.y + m);
   const showPorts = cam.zoom >= 0.3;
 
-  let rectCount = visible.length;
+  let rectCount = visible.length + 2; // + focus ring + selection rectangle
   if (showPorts) for (const n of visible) rectCount += (n.inputs?.length ?? 0) + (n.outputs?.length ?? 0);
   if (rects.length < rectCount * RECT_STRIDE) rects = new Float32Array(rectCount * RECT_STRIDE * 2);
 
   // while connecting, ports the dragged edge cannot land on are dimmed (cycles are only checked on drop)
   const link = drag?.kind === 'link' ? drag : null;
-  const dimPort: RGBA = [portColor[0], portColor[1], portColor[2], portColor[3] * 0.25];
+  const dimPort = withAlpha(portColor, 0.25);
   let ri = 0;
   for (const n of visible) {
-    const color = n.id === selected ? rgba(theme.nodeSelectedColor) : rgba(n.color ?? theme.nodeColor);
-    pushRect(ri++, n.x, n.y, c.width, nodeHeight(n, cfg), color, c.radius);
+    const h = nodeHeight(n, cfg);
+    if (focusVisible && n.id === focused) {
+      const g = 3 / cam.zoom; // ~3 screen px ring at any zoom
+      pushRect(ri++, n.x - g, n.y - g, c.width + 2 * g, h + 2 * g, accent, c.radius + g);
+    }
+    const color = selNodes.has(n.id) ? rgba(theme.nodeSelectedColor) : rgba(n.color ?? theme.nodeColor);
+    pushRect(ri++, n.x, n.y, c.width, h, color, c.radius);
     if (!showPorts) continue;
     for (const side of ['in', 'out'] as const) {
       const ports = (side === 'in' ? n.inputs : n.outputs) ?? [];
@@ -128,24 +157,36 @@ function render() {
       }
     }
   }
+  if (drag?.kind === 'marquee') {
+    const { x0, y0, x1, y1 } = drag;
+    pushRect(ri++, Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0), withAlpha(accent, 0.2), 0);
+  }
 
   // shortcut: edges with no visible endpoint are skipped even if they cross the viewport.
   const edges = store.edgesOf(visible);
+  drawnEdges = edges;
   const SEG = cam.zoom >= 0.5 ? 24 : 8, VERTS_PER_CURVE = SEG * 6;
-  const curveCount = edges.length + (drag?.kind === 'link' ? 1 : 0);
+  const curveCount = edges.length + (link ? 1 : 0);
   if (lines.length < curveCount * VERTS_PER_CURVE * 2) lines = new Float32Array(curveCount * VERTS_PER_CURVE * 4);
   let li = 0;
   const hw = cfg.edge.width / 2;
+  // selected edges go last, so they draw on top in the accent color
+  const picked: FlowEdge[] = [];
   for (const e of edges) {
-    const s = store.node(e.source), t = store.node(e.target);
-    if (!s || !t) continue;
-    const a = portPos(s, 'out', portIndex(s, 'out', e.sourcePort), cfg);
-    const b = portPos(t, 'in', portIndex(t, 'in', e.targetPort), cfg);
-    li = pushCurve(li, bezier(a.x, a.y, b.x, b.y, SEG), hw);
+    if (selEdges.has(e.id)) picked.push(e);
+    else {
+      const pts = curve(e, SEG);
+      if (pts) li = pushCurve(li, pts, hw);
+    }
   }
-  if (drag?.kind === 'link') {
-    const p = portPos(drag.node, drag.side, portIndex(drag.node, drag.side, drag.port), cfg);
-    const [a, b] = drag.side === 'out' ? [p, { x: drag.wx, y: drag.wy }] : [{ x: drag.wx, y: drag.wy }, p];
+  const accentFrom = li;
+  for (const e of picked) {
+    const pts = curve(e, SEG);
+    if (pts) li = pushCurve(li, pts, hw * 1.5);
+  }
+  if (link) {
+    const p = portPos(link.node, link.side, portIndex(link.node, link.side, link.port), cfg);
+    const [a, b] = link.side === 'out' ? [p, { x: link.wx, y: link.wy }] : [{ x: link.wx, y: link.wy }, p];
     li = pushCurve(li, bezier(a.x, a.y, b.x, b.y, SEG), hw);
   }
 
@@ -156,9 +197,11 @@ function render() {
     rects, rectCount: ri,
     lines, lineCount: li,
     lineColor: rgba(theme.edgeColor),
+    accentFrom, accentColor: accent,
   });
   drawText(visible);
   reportSelection();
+  reportFocus();
   reportStats();
 }
 
@@ -181,13 +224,47 @@ function drawText(visible: FlowNode[]) {
   }
 }
 
-function onPointer(kind: 'down' | 'move' | 'up' | 'cancel', sx: number, sy: number) {
+// --- selection -------------------------------------------------------------------
+
+function selectOnly(nodes: Iterable<string>, edges: Iterable<string> = []) {
+  selNodes = new Set(nodes);
+  selEdges = new Set(edges);
+  selVersion++;
+}
+
+function toggleIn(set: Set<string>, id: string) {
+  if (!set.delete(id)) set.add(id);
+  selVersion++;
+}
+
+/** Drops removed ids from the selection and focus. */
+function prune(ch: GraphChanges) {
+  for (const id of ch.removeNodes) if (selNodes.delete(id)) selVersion++;
+  for (const id of ch.removeEdges) if (selEdges.delete(id)) selVersion++;
+  if (focused && ch.removeNodes.includes(focused)) focused = null;
+}
+
+/** Closest drawn edge within a few screen px of the world point. */
+function edgeAt(wx: number, wy: number): FlowEdge | null {
+  let best: FlowEdge | null = null, bestDist = Math.max(cfg.edge.width, 6 / cam.zoom);
+  for (const e of drawnEdges) {
+    const pts = curve(e, 24);
+    const d = pts ? distToPolyline(pts, wx, wy) : Infinity;
+    if (d < bestDist) [best, bestDist] = [e, d];
+  }
+  return best;
+}
+
+// --- pointer -----------------------------------------------------------------------
+
+function onPointer(kind: 'down' | 'move' | 'up' | 'cancel', sx: number, sy: number, toggle = false) {
   const w = toWorld(cam, sx, sy);
   if (kind === 'cancel') {
     if (drag?.kind === 'link' && drag.detached) store.connect(drag.detached); // put the picked-up edge back
     if (drag?.kind === 'node') endNodeDrag(drag);
     drag = null;
   } else if (kind === 'down') {
+    focusVisible = false; // the ring is for keyboard users; clicks still move the focus below
     const hit = store.hit(w.x, w.y);
     const port = readonly ? undefined : hit?.port;
     // grabbing a connected input picks up its edge (last one) so it can be reconnected or dropped
@@ -199,22 +276,44 @@ function onPointer(kind: 'down' | 'move' | 'up' | 'cancel', sx: number, sy: numb
     } else if (hit && port) {
       drag = { kind: 'link', node: hit.node, side: port.side, port: port.id, wx: w.x, wy: w.y };
     } else if (hit) {
+      const id = hit.node.id;
+      focused = id;
       // bring to front so it draws (and hit-tests) on top
-      store.bringToFront(hit.node.id);
-      drag = { kind: 'node', node: hit.node, dx: w.x - hit.node.x, dy: w.y - hit.node.y, moved: false, fixed: readonly || !!hit.node.locked };
-      if (!drag.fixed) store.begin(); // the whole gesture is one undo step
+      store.bringToFront(id);
+      if (!toggle && !selNodes.has(id)) selectOnly([id]);
+      // shortcut: dragging a huge selection (Ctrl+A on 1M nodes) moves every node every frame.
+      const ids = selNodes.has(id) ? selNodes : [id];
+      const group = readonly ? [] : [...ids].flatMap((i) => {
+        const n = store.node(i);
+        return n && !n.locked ? [{ id: i, x: n.x, y: n.y }] : [];
+      });
+      drag = { kind: 'node', node: hit.node, toggle, sx: w.x, sy: w.y, group, moved: false };
+      if (group.length) store.begin(); // the whole gesture is one undo step
     } else {
-      selected = null;
-      drag = { kind: 'pan', sx, sy };
+      const edge = edgeAt(w.x, w.y);
+      if (edge) {
+        if (toggle) toggleIn(selEdges, edge.id);
+        else selectOnly([], [edge.id]);
+        drag = { kind: 'pan', sx, sy };
+      } else if (toggle) {
+        drag = { kind: 'marquee', x0: w.x, y0: w.y, x1: w.x, y1: w.y };
+      } else {
+        if (selNodes.size || selEdges.size) selectOnly([]);
+        drag = { kind: 'pan', sx, sy };
+      }
     }
   } else if (kind === 'move' && drag) {
     if (drag.kind === 'pan') {
       cam = { ...cam, x: cam.x + sx - drag.sx, y: cam.y + sy - drag.sy };
       drag.sx = sx;
       drag.sy = sy;
+    } else if (drag.kind === 'marquee') {
+      drag.x1 = w.x;
+      drag.y1 = w.y;
     } else if (drag.kind === 'node') {
-      if (drag.fixed) return;
-      store.move(drag.node.id, w.x - drag.dx, w.y - drag.dy);
+      if (!drag.group.length) return;
+      const dx = w.x - drag.sx, dy = w.y - drag.sy;
+      for (const g of drag.group) store.move(g.id, g.x + dx, g.y + dy);
       drag.moved = true;
     } else {
       drag.wx = w.x;
@@ -222,24 +321,26 @@ function onPointer(kind: 'down' | 'move' | 'up' | 'cancel', sx: number, sy: numb
     }
   } else if (kind === 'up' && drag) {
     if (drag.kind === 'node') {
-      selected = drag.node.id;
-      // drag.node is the snapshot from pointerdown; report where the node ended up
-      if (!endNodeDrag(drag)) send({ type: 'nodeClick', id: drag.node.id });
+      if (!endNodeDrag(drag)) {
+        // a click: toggle keys add/remove, a plain click narrows the selection to this node
+        if (drag.toggle) toggleIn(selNodes, drag.node.id);
+        else if (selNodes.size !== 1 || selEdges.size) selectOnly([drag.node.id]);
+        send({ type: 'nodeClick', id: drag.node.id });
+      }
+    } else if (drag.kind === 'marquee') {
+      const { x0, y0, x1, y1 } = drag;
+      for (const n of store.query(Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1))) selNodes.add(n.id);
+      selVersion++;
     } else if (drag.kind === 'link') {
       const hit = store.hit(w.x, w.y);
       const edge = hit?.port && hit.port.side !== drag.side && hit.node.id !== drag.node.id ? toEdge(drag, hit.node, hit.port.id) : null;
       const { detached } = drag;
       if (detached && edge && sameEdge(detached, edge)) {
         store.connect(detached); // dropped back where it was
-      } else if (edge && canConnect) {
-        // the picked-up edge stays out of the store until the main thread answers (resolveConnect)
-        if (!reject(edge, detached)) {
-          if (pendingLink?.detached) store.connect(pendingLink.detached); // a newer drop supersedes an unanswered one
-          pendingLink = { edge, detached };
-          send({ type: 'connectRequest', edge });
-        }
-      } else if (!edge || !reject(edge, detached)) {
-        link(edge, detached);
+      } else if (edge) {
+        tryLink(edge, detached);
+      } else {
+        link(null, detached);
       }
     }
     drag = null;
@@ -247,6 +348,16 @@ function onPointer(kind: 'down' | 'move' | 'up' | 'cancel', sx: number, sy: numb
     return; // hover move with no drag: nothing changed
   }
   schedule();
+}
+
+/** Applies the rules to a new edge, then either commits it or (with canConnect) asks the main thread first. */
+function tryLink(edge: FlowEdge, detached?: FlowEdge) {
+  if (reject(edge, detached)) return;
+  if (!canConnect) return link(edge, detached);
+  // the picked-up edge stays out of the store until the main thread answers (resolveConnect)
+  if (pendingLink?.detached) store.connect(pendingLink.detached); // a newer drop supersedes an unanswered one
+  pendingLink = { edge, detached };
+  send({ type: 'connectRequest', edge });
 }
 
 /**
@@ -260,14 +371,13 @@ function reject(edge: FlowEdge, detached: FlowEdge | undefined, reason = store.c
   return true;
 }
 
-/** Reports where a dragged node ended up and closes its undo step; false if it never moved. */
+/** Reports where dragged nodes ended up and closes the undo step; false if nothing moved. */
 function endNodeDrag(d: Extract<Drag, { kind: 'node' }>): boolean {
-  if (d.fixed) return false;
-  // d.node is the snapshot from pointerdown
-  const moved = d.moved && store.node(d.node.id);
-  if (moved) changed({ ...noChanges(), upsertNodes: [moved] });
+  if (!d.group.length) return false;
+  const moved = d.moved ? d.group.flatMap((g) => store.node(g.id) ?? []) : [];
+  if (moved.length) changed({ ...noChanges(), upsertNodes: moved });
   commit();
-  return !!moved;
+  return moved.length > 0;
 }
 
 /** Commits a connection gesture: drops the picked-up edge (if any) and adds the new one (if any). */
@@ -285,18 +395,23 @@ function link(edge: FlowEdge | null, detached: FlowEdge | undefined) {
 }
 
 // --- undo/redo: each entry is one user action, as the changes that undo and redo it
+
 const HISTORY_LIMIT = 100;
 type Step = { undo: GraphChanges; redo: GraphChanges };
 let undoStack: Step[] = [], redoStack: Step[] = [];
 
-/** Closes the open store transaction and, if it changed anything, pushes it as an undo step. */
-function commit() {
+/**
+ * Closes the open store transaction and, if it changed anything, pushes it as an undo step.
+ * report: also emit what changed as graphChange (for operations that did not report as they went).
+ */
+function commit(report = false) {
   const step = store.end();
   if (!step) return;
   undoStack.push(step);
   if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
   redoStack = [];
   reportHistory();
+  if (report) changed(step.redo);
 }
 
 /** Runs a mutation as one undo step. */
@@ -342,16 +457,129 @@ function resolveConnect(ok: boolean) {
 const sameEdge = (a: FlowEdge, b: FlowEdge) =>
   a.source === b.source && a.sourcePort === b.sourcePort && a.target === b.target && a.targetPort === b.targetPort;
 
-let lastSelection = '';
-/** Sends the selected node's screen rect whenever it changes, so the DOM menu can follow it. */
+// --- keyboard commands ----------------------------------------------------------------
+
+const DIRS = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] } as const;
+const centerOf = (n: FlowNode) => ({ x: n.x + cfg.node.width / 2, y: n.y + nodeHeight(n, cfg) / 2 });
+
+/** Nearest node in a direction (scored by distance along it plus twice the sideways offset). */
+function focusNext(dir: keyof typeof DIRS, keep: boolean): string | null {
+  const cur = focused ? store.node(focused) : undefined;
+  let best: FlowNode | undefined;
+  if (!cur) {
+    // first focus: the node nearest the viewport center; else any node at all
+    const c = toWorld(cam, width / 2, height / 2), tl = toWorld(cam, 0, 0), br = toWorld(cam, width, height);
+    let bestDist = Infinity;
+    for (const n of store.query(tl.x, tl.y, br.x, br.y)) {
+      const p = centerOf(n), d = Math.hypot(p.x - c.x, p.y - c.y);
+      if (d < bestDist) [best, bestDist] = [n, d];
+    }
+    best ??= store.node(store.ids()[0] ?? '');
+  } else {
+    const c = centerOf(cur), [ux, uy] = DIRS[dir];
+    for (const r of [1500, 15000]) {
+      let bestScore = Infinity;
+      for (const n of store.query(c.x - r, c.y - r, c.x + r, c.y + r)) {
+        const p = centerOf(n), dx = p.x - c.x, dy = p.y - c.y;
+        const along = dx * ux + dy * uy;
+        if (n.id === cur.id || along <= 1) continue;
+        const score = along + 2 * Math.abs(dx * uy - dy * ux);
+        if (score < bestScore) [best, bestScore] = [n, score];
+      }
+      if (best) break;
+    }
+  }
+  focusVisible = true;
+  if (best) {
+    focused = best.id;
+    if (!keep) selectOnly([best.id]);
+    reveal(best);
+  }
+  schedule();
+  return focused;
+}
+
+/** Pans to the node if it is not fully on screen. */
+function reveal(n: FlowNode) {
+  const sx = n.x * cam.zoom + cam.x, sy = n.y * cam.zoom + cam.y;
+  const inside = sx >= 0 && sy >= 0 && sx + cfg.node.width * cam.zoom <= width && sy + nodeHeight(n, cfg) * cam.zoom <= height;
+  if (inside) return;
+  const c = centerOf(n);
+  cam = { zoom: cam.zoom, x: width / 2 - c.x * cam.zoom, y: height / 2 - c.y * cam.zoom };
+}
+
+function moveSelection(dx: number, dy: number) {
+  store.begin();
+  for (const id of selNodes) {
+    const n = store.node(id);
+    if (n && !n.locked) store.move(id, n.x + dx, n.y + dy);
+  }
+  commit(true);
+}
+
+function removeMany(nodes: string[], edges: string[]) {
+  store.begin();
+  edges.forEach((id) => store.disconnect(id));
+  for (const id of nodes) if (!store.node(id)?.locked) store.remove(id);
+  commit(true);
+}
+
+/** Adds a copy of `g` (new ids, shifted) as one undo step and selects it. */
+function paste(g: GraphSnapshot) {
+  const copy = cloneGraph(g, PASTE_OFFSET, PASTE_OFFSET);
+  store.begin();
+  store.apply({ ...noChanges(), upsertNodes: copy.nodes, upsertEdges: copy.edges });
+  commit(true);
+  selectOnly(copy.nodes.map((n) => n.id));
+  schedule();
+}
+
+/** Connects the first output of `from` and input of `to` the rules allow (going through canConnect if set). */
+function connectNodes(from: string, to: string): boolean {
+  const a = store.node(from), b = store.node(to);
+  if (!a || !b || from === to) return false;
+  for (const o of a.outputs ?? []) {
+    for (const i of b.inputs ?? []) {
+      const edge: FlowEdge = { id: `${from}:${o.id}->${to}:${i.id}`, source: from, sourcePort: o.id, target: to, targetPort: i.id };
+      const taken = store.edgesOf([a]).some((e) => sameEdge(e, edge));
+      if (taken || store.check(edge)) continue;
+      tryLink(edge);
+      schedule();
+      return true;
+    }
+  }
+  return false;
+}
+
+// --- reports to the main thread ---------------------------------------------------------
+
+let sentSelVersion = -1;
+let lastMenu = '';
+/** Sends the selected ids when they change, and the menu anchor (single selected node) when it moves. */
 function reportSelection() {
-  const n = selected ? store.node(selected) : undefined;
+  if (sentSelVersion !== selVersion) {
+    sentSelVersion = selVersion;
+    send({ type: 'selected', nodes: [...selNodes], edges: [...selEdges] });
+  }
+  const only = selNodes.size === 1 && !selEdges.size ? selNodes.values().next().value : undefined;
+  const n = only ? store.node(only) : undefined;
   const msg: FromWorker = n
     ? { type: 'selection', id: n.id, x: n.x * cam.zoom + cam.x, y: n.y * cam.zoom + cam.y, w: cfg.node.width * cam.zoom, h: nodeHeight(n, cfg) * cam.zoom, locked: !!n.locked }
     : { type: 'selection', id: null, x: 0, y: 0, w: 0, h: 0, locked: false };
   const key = JSON.stringify(msg);
-  if (key !== lastSelection) {
-    lastSelection = key;
+  if (key !== lastMenu) {
+    lastMenu = key;
+    send(msg);
+  }
+}
+
+let lastFocus = '';
+function reportFocus() {
+  const n = focusVisible && focused ? store.node(focused) : undefined;
+  const msg: FromWorker = { type: 'focus', id: n?.id ?? null, label: n?.label ?? '', selected: !!n && selNodes.has(n.id) };
+  const key = JSON.stringify(msg);
+  if (key !== lastFocus) {
+    lastFocus = key;
     send(msg);
   }
 }
@@ -365,13 +593,17 @@ function reportStats() {
 }
 
 function changed(changes: GraphChanges) {
-  if (selected && !store.node(selected)) selected = null;
+  prune(changes);
   if (!store.nodeCount) cam = { x: 0, y: 0, zoom: 1 };
   send({ type: 'changes', changes });
   schedule();
 }
 
+/** Commands that change the graph; refused in readonly mode. */
+const EDITS = new Set<Command['op']>(['addAfter', 'remove', 'upsertNode', 'moveSelection', 'removeMany', 'paste', 'duplicate', 'connectNodes']);
+
 function run(command: Command): unknown {
+  if (readonly && EDITS.has(command.op)) return;
   switch (command.op) {
     case 'getNode':
       return store.node(command.id);
@@ -399,8 +631,8 @@ function run(command: Command): unknown {
     case 'center': {
       const n = store.node(command.id);
       if (!n) throw new Error(`ngx-node-flow: no node ${command.id}`);
-      const cx = n.x + cfg.node.width / 2, cy = n.y + nodeHeight(n, cfg) / 2;
-      setCam({ zoom: cam.zoom, x: width / 2 - cx * cam.zoom, y: height / 2 - cy * cam.zoom });
+      const c = centerOf(n);
+      setCam({ zoom: cam.zoom, x: width / 2 - c.x * cam.zoom, y: height / 2 - c.y * cam.zoom });
       return;
     }
     case 'zoom':
@@ -409,9 +641,28 @@ function run(command: Command): unknown {
     case 'resolveConnect':
       return resolveConnect(command.ok);
     case 'select':
-      selected = command.ids.find((id) => store.node(id)) ?? null;
-      schedule();
-      return;
+      selectOnly(command.ids.filter((id) => store.node(id)));
+      return schedule();
+    case 'selectAll':
+      selectOnly(store.ids());
+      return schedule();
+    case 'focusNext':
+      return focusNext(command.dir, command.keep);
+    case 'toggleFocused':
+      if (focused) toggleIn(selNodes, focused);
+      return schedule();
+    case 'moveSelection':
+      return moveSelection(command.dx, command.dy);
+    case 'removeMany':
+      return removeMany(command.nodes, command.edges);
+    case 'copy':
+      return store.subgraph(selNodes);
+    case 'paste':
+      return paste(command.graph);
+    case 'duplicate':
+      return paste(store.subgraph(selNodes));
+    case 'connectNodes':
+      return connectNodes(command.from, command.to);
   }
 }
 
@@ -487,7 +738,8 @@ addEventListener('message', (e: MessageEvent<ToWorker>) => {
       drag = null; // dragged objects were replaced
       pendingLink = null;
       clearHistory();
-      if (selected && !store.node(selected)) selected = null;
+      selectOnly([...selNodes].filter((id) => store.node(id)), [...selEdges].filter((id) => store.hasEdge(id)));
+      if (focused && !store.node(focused)) focused = null;
       if (!store.nodeCount) cam = { x: 0, y: 0, zoom: 1 };
       break;
     case 'command':
@@ -509,7 +761,7 @@ addEventListener('message', (e: MessageEvent<ToWorker>) => {
       colorCache.clear();
       break;
     case 'pointer':
-      return onPointer(m.kind, m.x, m.y);
+      return onPointer(m.kind, m.x, m.y, m.toggle);
     case 'view':
       cam = zoomAt({ ...cam, x: cam.x + m.panX, y: cam.y + m.panY }, m.x, m.y, m.zoom, cfg.zoom.min, cfg.zoom.max);
       break;

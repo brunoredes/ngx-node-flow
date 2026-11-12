@@ -87,6 +87,16 @@ export interface NodeFlowLabels {
   name: string;
   discard: string;
   save: string;
+  /** Keyboard instructions, read by screen readers as the canvas description. */
+  keyboardHelp: string;
+  /** Appended to the focused node's announcement when it is selected. */
+  selected: string;
+  /** Announced when C starts keyboard connect mode. */
+  connectFrom: string;
+  /** Prefix of the target node's name while choosing where to connect. */
+  connectTo: string;
+  connected: string;
+  noConnection: string;
 }
 
 /** What `createNode` returns; the library assigns id and position. */
@@ -119,6 +129,17 @@ export type Command =
   | { op: 'center'; id: string }
   | { op: 'zoom'; zoom: number }
   | { op: 'select'; ids: string[] }
+  | { op: 'selectAll' }
+  /** Moves keyboard focus to the nearest node in a direction; keep: leave the selection alone. Replies the focused id. */
+  | { op: 'focusNext'; dir: 'left' | 'right' | 'up' | 'down'; keep: boolean }
+  | { op: 'toggleFocused' }
+  | { op: 'moveSelection'; dx: number; dy: number }
+  | { op: 'removeMany'; nodes: string[]; edges: string[] }
+  | { op: 'copy' }
+  | { op: 'paste'; graph: GraphSnapshot }
+  | { op: 'duplicate' }
+  /** Connects the first compatible free output of `from` to an input of `to`; replies whether one was found. */
+  | { op: 'connectNodes'; from: string; to: string }
   | { op: 'resolveConnect'; ok: boolean }
   | { op: 'undo' }
   | { op: 'redo' };
@@ -127,7 +148,8 @@ export type ToWorker =
   | { type: 'init'; gl: OffscreenCanvas; text: OffscreenCanvas; config: NodeFlowConfig; theme: ResolvedTheme }
   | { type: 'resize'; width: number; height: number; dpr: number }
   | { type: 'data'; nodes: FlowNode[]; edges: FlowEdge[] }
-  | { type: 'pointer'; kind: 'down' | 'move' | 'up' | 'cancel'; x: number; y: number }
+  /** toggle: shift/ctrl/cmd held, adds to or removes from the selection (and drags a selection rectangle on empty space). */
+  | { type: 'pointer'; kind: 'down' | 'move' | 'up' | 'cancel'; x: number; y: number; toggle: boolean }
   /** Pans by (panX, panY) CSS px, then zooms by factor `zoom` around (x, y). */
   | { type: 'view'; x: number; y: number; zoom: number; panX: number; panY: number }
   | { type: 'theme'; theme: ResolvedTheme }
@@ -147,7 +169,10 @@ export type FromWorker =
   | { type: 'history'; undo: number; redo: number }
   | { type: 'reply'; reqId: number; value?: unknown; error?: string }
   | { type: 'error'; message: string }
-  /** Screen rect (CSS px) of the selected node; id null = nothing selected. */
+  | { type: 'selected'; nodes: string[]; edges: string[] }
+  /** Keyboard focus moved (id null = none), for the live region. */
+  | { type: 'focus'; id: string | null; label: string; selected: boolean }
+  /** Screen rect (CSS px) of the node the menu attaches to (exactly one node selected); id null = no menu. */
   | { type: 'selection'; id: string | null; x: number; y: number; w: number; h: number; locked: boolean };
 
 /**
