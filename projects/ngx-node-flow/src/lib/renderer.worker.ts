@@ -3,7 +3,7 @@
 import { align, Camera, dashes, distToPolyline, MINIMAP, nodeHeight, portPos, Rect, route, Side, toWorld, zoomAt } from './geometry';
 import { GlRenderer, RECT_STRIDE, RGBA } from './gl';
 import { cloneGraph, DIRS, GraphStore, noChanges } from './store';
-import { Command, FlowEdge, FlowGroup, FlowNode, FromWorker, GraphChanges, GraphChunk, GraphSnapshot, NodeFlowConfig, NodeStatus, ResolvedTheme, ToWorker } from './types';
+import { Command, FlowEdge, FlowGroup, FlowNode, FromWorker, GraphChanges, GraphSnapshot, NodeFlowConfig, NodeStatus, ResolvedTheme, ToWorker } from './types';
 
 const HEADER_TEXT_Y = 12;
 const PAD = 10;
@@ -982,21 +982,6 @@ function frame(x0: number, y0: number, x1: number, y1: number, padding: number) 
   setCam({ zoom, x: width / 2 - ((x0 + x1) / 2) * zoom, y: height / 2 - ((y0 + y1) / 2) * zoom });
 }
 
-/** Streamed chunks land through a WritableStream, so a slow worker back-pressures the producer. */
-function ingest(stream: ReadableStream<GraphChunk>): Promise<void> {
-  return stream.pipeTo(
-    new WritableStream<GraphChunk>(
-      {
-        write(chunk) {
-          store.addChunk(chunk);
-          schedule();
-        },
-      },
-      new CountQueuingStrategy({ highWaterMark: 4 }),
-    ),
-  );
-}
-
 const reply = (reqId: number, value?: unknown) => send({ type: 'reply', reqId, value });
 const fail = (reqId: number, err: unknown) => send({ type: 'reply', reqId, error: err instanceof Error ? `${err.name}: ${err.message}` : String(err) });
 
@@ -1060,9 +1045,6 @@ addEventListener('message', (e: MessageEvent<ToWorker>) => {
       } catch (err) {
         fail(m.reqId, err);
       }
-      return;
-    case 'stream':
-      ingest(m.stream).then(() => reply(m.reqId), (err) => fail(m.reqId, err));
       return;
     case 'mode':
       ({ readonly, canConnect, minimap: minimapOn, reducedMotion } = m);

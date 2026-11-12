@@ -19,7 +19,7 @@ import {
 import { NODE_FLOW_CONFIG } from './config';
 import { MINIMAP } from './geometry';
 import { resolveTheme, themeStyles, watchTheme } from './theme';
-import { iterate, toReadableStream } from './stream';
+import { abortable, iterate } from './stream';
 import { NodeFlowEditor } from './node-flow-editor';
 import { EdgeRejectedError } from './errors';
 import { parseClipboard, toClipboard } from './clipboard';
@@ -318,18 +318,13 @@ export class NodeFlow {
 
   /**
    * Streams a (possibly huge) graph into the worker, chunk by chunk, appending to what is there.
-   * The source is pulled lazily: the next chunk is only requested once the worker has room for it.
+   * One chunk is in flight at a time: the next is only pulled once the worker has stored the previous.
    */
   async load(source: AsyncIterable<GraphChunk> | ReadableStream<GraphChunk>, options: { signal?: AbortSignal } = {}): Promise<void> {
     this.setLoading(+1);
-    const stream = toReadableStream(source, options.signal);
     try {
-      try {
-        await this.call({ type: 'stream', stream }, [stream]);
-      } catch (err) {
-        if (!(err instanceof DOMException && err.name === 'DataCloneError')) throw err;
-        // no transferable streams (Safari): pump chunks over messages, one in flight at a time
-        for await (const chunk of iterate(stream)) await this.command({ op: 'chunk', chunk });
+      for await (const chunk of abortable(source instanceof ReadableStream ? iterate(source) : source, options.signal)) {
+        await this.command({ op: 'chunk', chunk });
       }
     } finally {
       this.setLoading(-1);
@@ -435,22 +430,18 @@ export class NodeFlow {
     });
   }
 
-  private async call<T>(msg: DistributiveOmit<Extract<ToWorker, { reqId: number }>, 'reqId'>, transfer: Transferable[] = []): Promise<T> {
+  private async command<T = void>(command: Command): Promise<T> {
     const worker = await this.whenWorker();
     const reqId = ++this.nextReq;
     return new Promise<T>((resolve, reject) => {
       this.pending.set(reqId, { resolve: resolve as (v: unknown) => void, reject });
       try {
-        worker.postMessage({ ...msg, reqId } as ToWorker, transfer);
+        worker.postMessage({ type: 'command', reqId, command } satisfies ToWorker); // throws DataCloneError for uncloneable data
       } catch (err) {
         this.pending.delete(reqId);
         reject(err);
       }
     });
-  }
-
-  private command<T = void>(command: Command): Promise<T> {
-    return this.call<T>({ type: 'command', command });
   }
 
   private newNode(): NewFlowNode {
@@ -803,4 +794,3 @@ const ARROWS: Partial<Record<string, Direction>> = {
   ArrowDown: 'down',
 };
 
-type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;

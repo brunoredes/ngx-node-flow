@@ -76,7 +76,7 @@ Outputs and signals:
 | `stats()` | signal: `{ nodes, edges, loading }` from the worker, `null` until the first frame |
 | `canUndo()`, `canRedo()` | signals: whether `undo()` / `redo()` would change something (always `false` when `readonly`) |
 
-Streaming: `load()` takes an `AsyncIterable` or `ReadableStream` of `GraphChunk` (`{ nodes?, edges? }`) and pulls the next chunk only when the worker has room, so a generator can produce millions of nodes without holding them all. Pass an `AbortSignal` to cancel; the promise rejects and the chunks already loaded stay. Loaded graphs skip the connection rules.
+Streaming: `load()` takes an `AsyncIterable` or `ReadableStream` of `GraphChunk` (`{ nodes?, edges? }`) and pulls the next chunk only once the worker has stored the previous one, so a generator can produce millions of nodes without holding them all. Pass an `AbortSignal` to cancel; the promise rejects and the chunks already loaded stay. Loaded graphs skip the connection rules.
 
 ```ts
 async function* chunks(): AsyncGenerator<GraphChunk> {
