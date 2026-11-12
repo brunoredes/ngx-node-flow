@@ -13,6 +13,7 @@ import {
   output,
   signal,
   viewChild,
+  ViewEncapsulation,
   WritableSignal,
 } from '@angular/core';
 import { NODE_FLOW_CONFIG } from './config';
@@ -172,6 +173,8 @@ type Selection = Extract<FromWorker, { type: 'selection' }> & { id: string };
     '(pointercancel)': 'pointer($event, "cancel")',
     '(wheel)': 'wheel($event)',
   },
+  // styles cannot leak in or out; host-target checks below use composedPath() because of it
+  encapsulation: ViewEncapsulation.ShadowDom,
 })
 export class NodeFlow {
   /**
@@ -522,6 +525,19 @@ export class NodeFlow {
     });
   }
 
+  /**
+   * The event started on the canvas itself, not in the menu or sheet. With shadow DOM, events from inside
+   * are retargeted to the host, so e.target alone cannot tell; the composed path's first entry can.
+   */
+  private fromHost(e: Event): boolean {
+    return e.composedPath()[0] === this.host;
+  }
+
+  /** Focused element; inside the shadow root, document.activeElement is only the host. */
+  private activeElement(): Element | null {
+    return this.host.shadowRoot?.activeElement ?? document.activeElement;
+  }
+
   protected trapFocus(e: KeyboardEvent) {
     if (e.key !== 'Tab') return;
     const items = this.sheet()?.nativeElement.querySelectorAll<HTMLElement>(
@@ -529,10 +545,10 @@ export class NodeFlow {
     );
     if (!items?.length) return;
     const first = items[0], last = items[items.length - 1];
-    if (e.shiftKey && document.activeElement === first) {
+    if (e.shiftKey && this.activeElement() === first) {
       e.preventDefault();
       last.focus();
-    } else if (!e.shiftKey && document.activeElement === last) {
+    } else if (!e.shiftKey && this.activeElement() === last) {
       e.preventDefault();
       first.focus();
     }
@@ -658,7 +674,7 @@ export class NodeFlow {
 
   protected key(e: KeyboardEvent) {
     // keys typed in the menu or the sheet belong to them
-    if (e.target !== this.host || this.draft()) return;
+    if (!this.fromHost(e) || this.draft()) return;
     if (this.shortcut(e)) e.preventDefault();
   }
 
@@ -767,7 +783,7 @@ export class NodeFlow {
 
   /** Paste arrives as an event (no clipboard permission prompt); only our own format is accepted. */
   protected paste(e: ClipboardEvent) {
-    if (e.target !== this.host || this.draft() || this.readonly()) return;
+    if (!this.fromHost(e) || this.draft() || this.readonly()) return;
     const graph = parseClipboard(e.clipboardData?.getData('text/plain') ?? '');
     if (!graph) return;
     e.preventDefault();
