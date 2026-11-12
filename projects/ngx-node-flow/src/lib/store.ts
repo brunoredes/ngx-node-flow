@@ -57,6 +57,9 @@ export class GraphStore {
   private grid = new Map<number, number[]>();
   private z = new Map<number, number>();
   private zTop = 0;
+  // open transaction: state of each touched node/edge before its first change (null = did not exist)
+  private tx: { nodes: Map<string, FlowNode | null>; edges: Map<string, FlowEdge | null> } | null = null;
+  private txDepth = 0;
 
   constructor(private readonly cfg: NodeFlowConfig) {}
 
@@ -130,6 +133,7 @@ export class GraphStore {
 
   private setNode(n: FlowNode): number {
     const s = this.slot(n.id);
+    this.touchNode(s);
     if (this.nAlive[s]) this.unindex(s);
     else this.liveNodes++;
     this.nAlive[s] = 1;
@@ -156,6 +160,7 @@ export class GraphStore {
   private setEdge(e: FlowEdge) {
     let s = this.eIdx.get(e.id);
     if (s !== undefined) this.deleteEdgeSlot(s);
+    else if (this.tx && !this.tx.edges.has(e.id)) this.tx.edges.set(e.id, null);
     s = this.eFree.pop() ?? this.eId.length;
     const size = s + 1;
     this.eSrc = grow(this.eSrc, size);
@@ -185,6 +190,7 @@ export class GraphStore {
   }
 
   private deleteEdgeSlot(s: number) {
+    if (this.tx && !this.tx.edges.has(this.eId[s])) this.tx.edges.set(this.eId[s], this.matEdge(s));
     for (const list of [this.out[this.eSrc[s]], this.inn[this.eDst[s]]]) {
       const i = list?.indexOf(s) ?? -1;
       if (i >= 0) list!.splice(i, 1);
@@ -192,6 +198,54 @@ export class GraphStore {
     this.eIdx.delete(this.eId[s]);
     this.eFree.push(s);
     this.liveEdges--;
+  }
+
+  private touchNode(s: number) {
+    const id = this.nId[s];
+    if (this.tx && !this.tx.nodes.has(id)) this.tx.nodes.set(id, this.nAlive[s] ? this.mat(s) : null);
+  }
+
+  // --- transactions -------------------------------------------------------------
+
+  /** Starts recording changes; nested calls join the outer transaction. */
+  begin() {
+    if (this.txDepth++ === 0) this.tx = { nodes: new Map(), edges: new Map() };
+  }
+
+  /**
+   * Closes the transaction. Returns what undoes it and what redoes it (both as plain GraphChanges),
+   * or null while nested or when nothing changed.
+   */
+  end(): { undo: GraphChanges; redo: GraphChanges } | null {
+    if (this.txDepth === 0 || --this.txDepth > 0 || !this.tx) return null;
+    const { nodes, edges } = this.tx;
+    this.tx = null;
+    const undo = noChanges(), redo = noChanges();
+    for (const [id, before] of nodes) {
+      const now = this.node(id);
+      if (before) undo.upsertNodes.push(before);
+      else if (now) undo.removeNodes.push(id);
+      if (now) redo.upsertNodes.push(now);
+      else if (before) redo.removeNodes.push(id);
+    }
+    for (const [id, before] of edges) {
+      const s = this.eIdx.get(id);
+      const now = s === undefined ? undefined : this.matEdge(s);
+      if (before) undo.upsertEdges.push(before);
+      else if (now) undo.removeEdges.push(id);
+      if (now) redo.upsertEdges.push(now);
+      else if (before) redo.removeEdges.push(id);
+    }
+    const empty = (c: GraphChanges) => !c.upsertNodes.length && !c.removeNodes.length && !c.upsertEdges.length && !c.removeEdges.length;
+    return empty(undo) && empty(redo) ? null : { undo, redo };
+  }
+
+  /** Applies a GraphChanges as-is (no pruning, no rules): edge removals, node removals, node upserts, edge upserts. */
+  apply(ch: GraphChanges) {
+    ch.removeEdges.forEach((id) => this.disconnect(id));
+    ch.removeNodes.forEach((id) => this.remove(id));
+    ch.upsertNodes.forEach((n) => this.setNode(n));
+    ch.upsertEdges.forEach((e) => this.setEdge(e));
   }
 
   // --- ingestion ----------------------------------------------------------------
@@ -342,6 +396,7 @@ export class GraphStore {
   move(id: string, x: number, y: number): GraphChanges {
     const s = this.nIdx.get(id);
     if (s === undefined || !this.nAlive[s]) return noChanges();
+    this.touchNode(s);
     this.unindex(s);
     this.nx[s] = x;
     this.ny[s] = y;
@@ -399,6 +454,7 @@ export class GraphStore {
   remove(id: string): GraphChanges {
     const s = this.nIdx.get(id);
     if (s === undefined || !this.nAlive[s]) return noChanges();
+    this.touchNode(s);
     const removeEdges = this.edgesAt(s).map((e) => {
       const edgeId = this.eId[e];
       this.deleteEdgeSlot(e);

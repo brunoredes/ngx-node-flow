@@ -2,6 +2,7 @@ import { NgTemplateOutlet } from '@angular/common';
 import {
   afterNextRender,
   Component,
+  computed,
   contentChild,
   DestroyRef,
   effect,
@@ -161,6 +162,10 @@ export class NodeFlow {
   private readonly _stats = signal<{ nodes: number; edges: number; loading: boolean } | null>(null);
   /** Counts from the worker (null until the first frame) and whether a load() is running. */
   readonly stats = this._stats.asReadonly();
+  private readonly history = signal({ undo: 0, redo: 0 });
+  /** Whether undo() / redo() would change something (always false in readonly mode). */
+  readonly canUndo = computed(() => !this.readonly() && this.history().undo > 0);
+  readonly canRedo = computed(() => !this.readonly() && this.history().redo > 0);
 
   protected readonly editor = contentChild(NodeFlowEditor);
   protected readonly selection = signal<Selection | null>(null);
@@ -270,6 +275,18 @@ export class NodeFlow {
   /** Sets the zoom (clamped to config.zoom) around the viewport center. */
   zoomTo(zoom: number): Promise<void> {
     return this.command({ op: 'zoom', zoom });
+  }
+
+  /**
+   * Reverts the last user action (move, connection, add, edit, remove) and reports it through graphChange.
+   * History holds the last 100 actions and is cleared when the nodes/edges inputs replace the graph.
+   */
+  undo(): Promise<void> {
+    return this.command({ op: 'undo' });
+  }
+
+  redo(): Promise<void> {
+    return this.command({ op: 'redo' });
   }
 
   /** Selects the given nodes (empty clears the selection). Unknown ids are ignored. */
@@ -450,6 +467,9 @@ export class NodeFlow {
     switch (m.type) {
       case 'changes':
         this.graphChange.emit(m.changes);
+        break;
+      case 'history':
+        this.history.set({ undo: m.undo, redo: m.redo });
         break;
       case 'stats':
         this._stats.set({ nodes: m.nodes, edges: m.edges, loading: this.loads > 0 });

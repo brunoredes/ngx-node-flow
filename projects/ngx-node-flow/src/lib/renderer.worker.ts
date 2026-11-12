@@ -185,6 +185,7 @@ function onPointer(kind: 'down' | 'move' | 'up' | 'cancel', sx: number, sy: numb
   const w = toWorld(cam, sx, sy);
   if (kind === 'cancel') {
     if (drag?.kind === 'link' && drag.detached) store.connect(drag.detached); // put the picked-up edge back
+    if (drag?.kind === 'node') endNodeDrag(drag);
     drag = null;
   } else if (kind === 'down') {
     const hit = store.hit(w.x, w.y);
@@ -201,6 +202,7 @@ function onPointer(kind: 'down' | 'move' | 'up' | 'cancel', sx: number, sy: numb
       // bring to front so it draws (and hit-tests) on top
       store.bringToFront(hit.node.id);
       drag = { kind: 'node', node: hit.node, dx: w.x - hit.node.x, dy: w.y - hit.node.y, moved: false, fixed: readonly || !!hit.node.locked };
+      if (!drag.fixed) store.begin(); // the whole gesture is one undo step
     } else {
       selected = null;
       drag = { kind: 'pan', sx, sy };
@@ -222,9 +224,7 @@ function onPointer(kind: 'down' | 'move' | 'up' | 'cancel', sx: number, sy: numb
     if (drag.kind === 'node') {
       selected = drag.node.id;
       // drag.node is the snapshot from pointerdown; report where the node ended up
-      const moved = drag.moved && store.node(drag.node.id);
-      if (moved) changed({ upsertNodes: [moved], removeNodes: [], upsertEdges: [], removeEdges: [] });
-      else send({ type: 'nodeClick', id: drag.node.id });
+      if (!endNodeDrag(drag)) send({ type: 'nodeClick', id: drag.node.id });
     } else if (drag.kind === 'link') {
       const hit = store.hit(w.x, w.y);
       const edge = hit?.port && hit.port.side !== drag.side && hit.node.id !== drag.node.id ? toEdge(drag, hit.node, hit.port.id) : null;
@@ -260,15 +260,74 @@ function reject(edge: FlowEdge, detached: FlowEdge | undefined, reason = store.c
   return true;
 }
 
+/** Reports where a dragged node ended up and closes its undo step; false if it never moved. */
+function endNodeDrag(d: Extract<Drag, { kind: 'node' }>): boolean {
+  if (d.fixed) return false;
+  // d.node is the snapshot from pointerdown
+  const moved = d.moved && store.node(d.node.id);
+  if (moved) changed({ ...noChanges(), upsertNodes: [moved] });
+  commit();
+  return !!moved;
+}
+
 /** Commits a connection gesture: drops the picked-up edge (if any) and adds the new one (if any). */
 function link(edge: FlowEdge | null, detached: FlowEdge | undefined) {
+  if (detached) store.connect(detached); // back in first, so the undo step records its removal
+  store.begin();
+  if (detached) store.disconnect(detached.id);
   const ch = noChanges();
   if (detached) ch.removeEdges.push(detached.id);
   const added = edge && store.connect(edge);
   if (added) ch.upsertEdges.push(...added.upsertEdges);
   if (detached || added) changed(ch);
   if (added) send({ type: 'edgeCreated', edge: edge! });
+  commit();
 }
+
+// --- undo/redo: each entry is one user action, as the changes that undo and redo it
+const HISTORY_LIMIT = 100;
+type Step = { undo: GraphChanges; redo: GraphChanges };
+let undoStack: Step[] = [], redoStack: Step[] = [];
+
+/** Closes the open store transaction and, if it changed anything, pushes it as an undo step. */
+function commit() {
+  const step = store.end();
+  if (!step) return;
+  undoStack.push(step);
+  if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
+  redoStack = [];
+  reportHistory();
+}
+
+/** Runs a mutation as one undo step. */
+function record(fn: () => void) {
+  store.begin();
+  try {
+    fn();
+  } finally {
+    commit();
+  }
+}
+
+function travel(from: Step[], to: Step[], dir: keyof Step) {
+  if (readonly || drag) return; // a drag holds an open transaction: finish the gesture first
+  const step = from.pop();
+  if (!step) return;
+  store.begin();
+  store.apply(step[dir]);
+  const done = store.end();
+  to.push(step);
+  if (done) changed(done.redo); // what actually changed, so graphChange stays exact
+  reportHistory();
+}
+
+function clearHistory() {
+  undoStack = [];
+  redoStack = [];
+  reportHistory();
+}
+
+const reportHistory = () => send({ type: 'history', undo: undoStack.length, redo: redoStack.length });
 
 /** The main thread's answer to a connectRequest (the canConnect input). */
 function resolveConnect(ok: boolean) {
@@ -317,14 +376,15 @@ function run(command: Command): unknown {
     case 'getNode':
       return store.node(command.id);
     case 'addAfter':
-      changed(store.addAfter(command.id, command.node));
-      return;
+      return record(() => changed(store.addAfter(command.id, command.node)));
     case 'remove':
-      changed(store.remove(command.id));
-      return;
+      return record(() => changed(store.remove(command.id)));
     case 'upsertNode':
-      changed(store.upsertNode(command.node));
-      return;
+      return record(() => changed(store.upsertNode(command.node)));
+    case 'undo':
+      return travel(undoStack, redoStack, 'undo');
+    case 'redo':
+      return travel(redoStack, undoStack, 'redo');
     case 'chunk':
       store.addChunk(command.chunk);
       schedule();
@@ -426,6 +486,7 @@ addEventListener('message', (e: MessageEvent<ToWorker>) => {
       store.reset(m.nodes, m.edges);
       drag = null; // dragged objects were replaced
       pendingLink = null;
+      clearHistory();
       if (selected && !store.node(selected)) selected = null;
       if (!store.nodeCount) cam = { x: 0, y: 0, zoom: 1 };
       break;

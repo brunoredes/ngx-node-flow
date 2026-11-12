@@ -221,6 +221,63 @@ describe('connection rules', () => {
   });
 });
 
+describe('transactions', () => {
+  it('undoing a removal restores the node and its edges, redo removes them again', () => {
+    const s = store();
+    s.begin();
+    s.remove('b');
+    const step = s.end()!;
+    expect(step.undo.upsertNodes).toEqual([b()]);
+    expect(step.undo.upsertEdges.map((e) => e.id).sort()).toEqual(['ab', 'bc']);
+    s.apply(step.undo);
+    expect(s.snapshot()).toEqual(store().snapshot());
+    s.apply(step.redo);
+    expect(s.node('b')).toBeUndefined();
+    expect(s.edgeCount).toBe(0);
+  });
+
+  it('keeps the first prior state across many moves (one drag = one step)', () => {
+    const s = store();
+    s.begin();
+    for (let x = 1; x <= 5; x++) s.move('a', x, x);
+    const step = s.end()!;
+    expect(step.undo.upsertNodes).toEqual([a()]);
+    expect(step.redo.upsertNodes).toEqual([{ ...a(), x: 5, y: 5 }]);
+  });
+
+  it('undoing an addAfter removes the node and its edge', () => {
+    const s = store([a()], []);
+    s.begin();
+    s.addAfter('a', tpl());
+    const step = s.end()!;
+    expect(step.undo.removeNodes).toEqual(['new']);
+    expect(step.undo.removeEdges).toHaveLength(1);
+    s.apply(step.undo);
+    expect(s.snapshot()).toEqual({ nodes: [a()], edges: [] });
+  });
+
+  it('nests, and reports nothing for an empty transaction', () => {
+    const s = store();
+    s.begin();
+    s.begin();
+    s.move('a', 9, 9);
+    expect(s.end()).toBeNull();
+    expect(s.end()?.undo.upsertNodes).toEqual([a()]);
+    s.begin();
+    expect(s.end()).toBeNull();
+  });
+
+  it('records a replaced edge as an upsert of its old version', () => {
+    const s = store();
+    s.begin();
+    s.disconnect('ab');
+    s.connect({ ...ab, sourcePort: 'o2' });
+    const step = s.end()!;
+    expect(step.undo.upsertEdges).toEqual([ab]);
+    expect(step.redo.upsertEdges).toEqual([{ ...ab, sourcePort: 'o2' }]);
+  });
+});
+
 describe('applyChanges', () => {
   it('upserts and removes', () => {
     const g = applyChanges([a(), b()], [ab], { upsertNodes: [{ ...a(), x: 9 }], removeNodes: ['b'], upsertEdges: [], removeEdges: ['ab'] });

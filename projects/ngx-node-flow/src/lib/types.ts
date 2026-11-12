@@ -119,7 +119,9 @@ export type Command =
   | { op: 'center'; id: string }
   | { op: 'zoom'; zoom: number }
   | { op: 'select'; ids: string[] }
-  | { op: 'resolveConnect'; ok: boolean };
+  | { op: 'resolveConnect'; ok: boolean }
+  | { op: 'undo' }
+  | { op: 'redo' };
 
 export type ToWorker =
   | { type: 'init'; gl: OffscreenCanvas; text: OffscreenCanvas; config: NodeFlowConfig; theme: ResolvedTheme }
@@ -141,6 +143,8 @@ export type FromWorker =
   | { type: 'connectRequest'; edge: FlowEdge }
   | { type: 'changes'; changes: GraphChanges }
   | { type: 'stats'; nodes: number; edges: number }
+  /** Undo/redo stack sizes. */
+  | { type: 'history'; undo: number; redo: number }
   | { type: 'reply'; reqId: number; value?: unknown; error?: string }
   | { type: 'error'; message: string }
   /** Screen rect (CSS px) of the selected node; id null = nothing selected. */

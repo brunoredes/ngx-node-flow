@@ -5,6 +5,9 @@
   } @else {
     <button type="button" (click)="addMany()">Adicionar 1M nós</button>
   }
+  <button type="button" [disabled]="!flow()?.canUndo()" (click)="flow()?.undo()">Desfazer</button>
+  <button type="button" [disabled]="!flow()?.canRedo()" (click)="flow()?.redo()">Refazer</button>
+  <button type="button" (click)="flow()?.fitView()">Ver tudo</button>
   <button type="button" (click)="toggleTheme()">Tema: {{ light() ? 'claro' : 'escuro' }}</button>
   <span aria-live="polite">
     {{ stats?.nodes ?? 0 }} nós · {{ stats?.edges ?? 0 }} edges
