@@ -229,8 +229,7 @@ export type ToWorker =
   | { type: 'theme'; theme: ResolvedTheme }
   | { type: 'groups'; groups: FlowGroup[] }
   | { type: 'mode'; readonly: boolean; canConnect: boolean; minimap: boolean; reducedMotion: boolean }
-  | { type: 'command'; reqId: number; command: Command }
-  | { type: 'stream'; reqId: number; stream: ReadableStream<GraphChunk> };
+  | { type: 'command'; reqId: number; command: Command };
 
 export type FromWorker =
   | { type: 'nodeClick'; id: string }
