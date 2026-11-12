@@ -1,59 +1,37 @@
-# NgxNodeFlow
+# ngx-node-flow
 
-This project was generated using [Angular CLI](https://github.com/angular/angular-cli) version 22.2.6.
+Interactive flowgraph for Angular, drawn with WebGL2 + Canvas 2D on an `OffscreenCanvas` inside a Web Worker. Library API and options: [projects/ngx-node-flow/README.md](projects/ngx-node-flow/README.md).
 
-## Development server
+## Workspace
 
-To start a local development server, run:
+| Path | What it is |
+|---|---|
+| `projects/ngx-node-flow` | the library (`ngx-node-flow`) |
+| `projects/ngx-node-flow/layout` | secondary entry point `ngx-node-flow/layout` (`layered()` auto-layout) |
+| `projects/demo` | demo app that consumes the built library |
+| `scripts/build-worker.mjs` | bundles the renderer worker into a string constant (ng-packagr cannot emit worker entries) |
 
-```bash
-ng serve
-```
-
-Once the server is running, open your browser and navigate to `http://localhost:4200/`. The application will automatically reload whenever you modify any of the source files.
-
-## Code scaffolding
-
-Angular CLI includes powerful code scaffolding tools. To generate a new component, run:
+## Demo
 
 ```bash
-ng generate component component-name
+npm start   # builds the library, then serves the demo at http://localhost:4200/
 ```
 
-For a complete list of available schematics (such as `components`, `directives`, or `pipes`), run:
+The demo shows:
 
-```bash
-ng generate --help
-```
+- **Posts panel**: cards listing [jsonplaceholder posts](https://jsonplaceholder.typicode.com/posts). Clicking a card fetches that post's comments (`/comments?postId=N`) and replaces the graph with one post node linked to a node per comment. Needs network access.
+- **1M nodes**: streams a million nodes into the worker in 10k chunks via `load()`, cancellable.
+- Typed ports and cycle rejection on the initial cell graph, node search, PNG export, light/dark theme, and a map-actions button (undo, redo, fit view, arrange).
 
-## Building
+## Scripts
 
-To build the project run:
+| Command | Does |
+|---|---|
+| `npm start` | build the library and serve the demo |
+| `npm run build:lib` | build the worker bundle and the library into `dist/ngx-node-flow` |
+| `npm run build` | build every project (runs `build:worker` first) |
+| `npm run watch` | development build in watch mode |
+| `npm test` | library unit tests (Vitest) |
+| `npx ng test demo` | demo unit tests |
 
-```bash
-ng build
-```
-
-This will compile your project and store the build artifacts in the `dist/` directory. By default, the production build optimizes your application for performance and speed.
-
-## Running unit tests
-
-To execute unit tests with the [Vitest](https://vitest.dev/) test runner, use the following command:
-
-```bash
-ng test
-```
-
-## Running end-to-end tests
-
-For end-to-end (e2e) testing, run:
-
-```bash
-ng e2e
-```
-
-Angular CLI does not come with an end-to-end testing framework by default. You can choose one that suits your needs.
-
-## Additional Resources
-
-For more information on using the Angular CLI, including detailed command references, visit the [Angular CLI Overview and Command Reference](https://angular.dev/tools/cli) page.
+Edit `renderer.worker.ts` and run `npm run build:worker` (or any script above that runs it) before the change shows up: the library embeds the bundled worker source, not the file itself.

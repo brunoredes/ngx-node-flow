@@ -2,6 +2,8 @@
 
 Interactive flowgraph for Angular. Nodes and edges are drawn with WebGL2 + Canvas 2D on an `OffscreenCanvas` inside a Web Worker.
 
+Requires Angular 22 (`@angular/core` and `@angular/common` are peer dependencies) and a browser with WebGL2 and `OffscreenCanvas`; if the renderer cannot start, `(error)` fires. Pages with a CSP need `worker-src blob:`.
+
 ```ts
 // app.config.ts
 providers: [provideNodeFlow({ grid: { size: 24 } })]
@@ -16,6 +18,19 @@ providers: [provideNodeFlow({ grid: { size: 24 } })]
 ```
 
 The worker is the single source of truth. `nodes`/`edges` are the initial graph: edits are never written back to them, and setting a new array replaces the whole graph (including what `load()` streamed in). To keep your own copy, fold each `graphChange` with `applyChanges(nodes, edges, change)`.
+
+To swap graphs at runtime (e.g. show the data of whatever the user picked), bind signals and set them; history is cleared, and `fitView()` should run once the new inputs have reached the worker:
+
+```ts
+protected readonly nodes = signal<FlowNode[]>([]);
+protected readonly edges = signal<FlowEdge[]>([]);
+
+show(graph: { nodes: FlowNode[]; edges: FlowEdge[] }) {
+  this.nodes.set(graph.nodes);
+  this.edges.set(graph.edges);
+  afterNextRender(() => this.flow()?.fitView(), { injector: this.injector });
+}
+```
 
 Ports are objects: `{ id, label?, type?, maxConnections? }`. Edges reference the port `id`, so a label can change without dropping edges.
 
@@ -45,7 +60,32 @@ Imperative API (on the component instance, e.g. via `viewChild(NodeFlow)`):
 | `exportImage(type?)` | the current view as a `Blob` (PNG by default); call `fitView()` first for the whole graph |
 | `select(ids)` | selects nodes (`[]` clears); `(selectionChange)` reports `{ nodes, edges }` |
 | `undo()`, `redo()`, `canUndo()`, `canRedo()` | history of the last 100 user actions, kept in the worker; undo/redo report through `graphChange`. Replacing `nodes`/`edges` clears it |
-| `load(source)` | streams a large graph in chunks |
+| `load(source, { signal? })` | streams a large graph in chunks, appending to what is there (see below) |
+
+Outputs and signals:
+
+| member | reports |
+|---|---|
+| `(graphChange)` | every change to the graph (moves, edits, connections, undo/redo) as `GraphChanges`; fold with `applyChanges()` |
+| `(nodeClick)` | the clicked node id |
+| `(edgeCreated)` | the `FlowEdge` the user just connected |
+| `(edgeRejected)` | an `EdgeRejectedError` for a refused connection (see the rules above) |
+| `(selectionChange)` | `{ nodes, edges }` ids of the selection |
+| `(groupToggle)` | `{ id, collapsed }` when a group is collapsed or expanded |
+| `(error)` | the renderer could not start (e.g. no WebGL2) or the worker crashed |
+| `stats()` | signal: `{ nodes, edges, loading }` from the worker, `null` until the first frame |
+| `canUndo()`, `canRedo()` | signals: whether `undo()` / `redo()` would change something (always `false` when `readonly`) |
+
+Streaming: `load()` takes an `AsyncIterable` or `ReadableStream` of `GraphChunk` (`{ nodes?, edges? }`) and pulls the next chunk only when the worker has room, so a generator can produce millions of nodes without holding them all. Pass an `AbortSignal` to cancel; the promise rejects and the chunks already loaded stay. Loaded graphs skip the connection rules.
+
+```ts
+async function* chunks(): AsyncGenerator<GraphChunk> {
+  for (let page = 0; page < 100; page++) yield { nodes: await fetchNodes(page) };
+}
+
+const abort = new AbortController();
+await flow.load(chunks(), { signal: abort.signal });
+```
 
 Edges and nodes, still drawn on the canvas:
 
@@ -89,7 +129,18 @@ The edit sheet is a modal dialog (opened from buttons with `aria-haspopup="dialo
 
 Tab leaves the canvas (into the node menu, then out), so it is never a keyboard trap. Copy writes JSON to the clipboard, and paste only accepts that format, validated before it reaches the graph.
 
-Build with `npm run build:lib` (it bundles the worker first). Pages with a CSP need `worker-src blob:`.
+Configuration defaults (`DEFAULT_NODE_FLOW_CONFIG`); `provideNodeFlow()` merges what you pass over them, per section:
+
+| section | defaults |
+|---|---|
+| `grid` | `size: 20`, `visible: true`, `snap: false`, `guides: true` |
+| `node` | `width: 160`, `height: 60`, `radius: 8`, `portRadius: 6`, `fontSize: 13` |
+| `edge` | `width: 2`, `allowCycles: true`, `routing: 'bezier'`, no `compatibility` |
+| `zoom` | `min: 0.1`, `max: 4` |
+| `theme` | `DEFAULT_NODE_FLOW_THEME` (see below) |
+| `labels` | English strings (`NodeFlowLabels`) |
+
+Build with `npm run build:lib` (it bundles the worker first).
 
 ## Theme
 
