@@ -139,6 +139,29 @@ describe('GraphStore memory layout', () => {
     expect(s.node('b')).toEqual(b());
   });
 
+  it('back-to-back nodes whose ports differ only in label, type or limit keep their own ports', () => {
+    const base = { x: 0, y: 0, label: 'P' };
+    const variants: FlowNode[] = [
+      { ...base, id: 'p1', inputs: [{ id: 'in' }] },
+      { ...base, id: 'p2', inputs: [{ id: 'in', label: 'Entrada' }] },
+      { ...base, id: 'p3', inputs: [{ id: 'in', type: 'text' }] },
+      { ...base, id: 'p4', inputs: [{ id: 'in', maxConnections: 1 }] },
+      { ...base, id: 'p5', inputs: [{ id: 'in' }], outputs: [] },
+      { ...base, id: 'p6', inputs: [{ id: 'in' }, { id: 'in2' }] },
+    ];
+    const s = store(variants, []);
+    for (const n of variants) expect(s.node(n.id)).toEqual(n);
+  });
+
+  it('keeps unknown extra fields and drops extras a replacement no longer has', () => {
+    const custom = { ...c(), color: 'red', tag: 'x' } as FlowNode & { tag: string };
+    const s = store([custom], [{ ...ab, label: 'L', weight: 3 } as FlowEdge]);
+    expect(s.node('c')).toEqual(custom);
+    expect(s.snapshot().edges).toEqual([{ ...ab, label: 'L', weight: 3 }]);
+    s.upsertNode(c());
+    expect(s.node('c')).toEqual(c());
+  });
+
   it('reuses freed slots and keeps counts right', () => {
     const s = store();
     s.remove('c');
