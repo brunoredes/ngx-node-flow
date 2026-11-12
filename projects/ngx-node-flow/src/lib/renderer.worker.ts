@@ -726,7 +726,11 @@ const centerOf = (n: FlowNode) => ({ x: n.x + cfg.node.width / 2, y: n.y + nodeH
 function focusNext(dir: keyof typeof DIRS, keep: boolean): { id: string | null; moved: boolean; open: (keyof typeof DIRS)[] } {
   const cur = focused ? store.node(focused) : undefined;
   let best: FlowNode | undefined;
-  if (!cur) {
+  if (cur && !focusVisible && !store.hidden(cur.id)) {
+    // focus came from a click (no ring yet): the first arrow shows where you are instead of moving, so one
+    // announcement (this node) is read, not a race between it and "nothing that way"
+    best = cur;
+  } else if (!cur) {
     // first focus: the node nearest the viewport center; else any node at all
     const c = toWorld(cam, width / 2, height / 2), tl = toWorld(cam, 0, 0), br = toWorld(cam, width, height);
     let bestDist = Infinity;
