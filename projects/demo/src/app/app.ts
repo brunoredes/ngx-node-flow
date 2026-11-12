@@ -21,6 +21,7 @@ export class App {
   protected readonly result = computed(() => resolveResult(this.graph().nodes, this.graph().edges));
   protected readonly lastEvent = signal('');
   protected readonly light = signal(false);
+  protected readonly actionsOpen = signal(false);
   protected readonly flow = viewChild(NodeFlow);
   private readonly document = inject(DOCUMENT);
   private abort: AbortController | null = null;

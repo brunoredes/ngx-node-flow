@@ -1,9 +1,18 @@
 :host { display: flex; flex-direction: column; height: 100dvh; font-family: sans-serif; }
 header { display: flex; gap: 1rem; align-items: center; padding: 0.5rem 1rem; background: #111; color: #ddd; }
-main { flex: 1; display: flex; min-height: 0; }
+main { flex: 1; display: flex; gap: 8px; min-height: 0; }
+/* Column left of the map; the open list stacks above the FAB, at the page's bottom-left. */
+nav { align-self: flex-end; display: flex; flex-direction: column-reverse; gap: 8px; margin: 0 0 8px 8px; }
+nav ul { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.fab { width: 40px; height: 40px; border-radius: 50%; border: 1px solid light-dark(#cbd5e0, #ffffff33); background: var(--demo-surface); color: light-dark(#1a202c, #e2e8f0); font-size: 1.25rem; line-height: 1; cursor: pointer; }
+.fab[aria-disabled='true'] { opacity: 0.5; cursor: not-allowed; }
+.fab:focus-visible { outline: 2px solid var(--demo-accent); outline-offset: 2px; }
 ngx-node-flow { flex: 1; }
 app-result-preview { width: 240px; flex: none; overflow: auto; background: var(--demo-surface); color: light-dark(#1a202c, #e2e8f0); border-left: 1px solid light-dark(#cbd5e0, #ffffff33); }
 @media (max-width: 640px) {
   main { flex-direction: column; }
+  /* Stacked layout: FAB goes below the map, list opens to its right. */
+  nav { order: 1; align-self: flex-start; flex-direction: row; }
+  nav ul { flex-direction: row; }
   app-result-preview { width: auto; max-height: 40%; border-left: 0; border-top: 1px solid light-dark(#cbd5e0, #ffffff33); }
 }

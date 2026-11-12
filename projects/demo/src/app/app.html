@@ -6,10 +6,6 @@
     <button type="button" (click)="addMany()">Adicionar 1M nós</button>
     <button type="button" (click)="addParcels()">Carregar giant.json</button>
   }
-  <button type="button" [disabled]="!flow()?.canUndo()" (click)="flow()?.undo()">Desfazer</button>
-  <button type="button" [disabled]="!flow()?.canRedo()" (click)="flow()?.redo()">Refazer</button>
-  <button type="button" (click)="flow()?.fitView()">Ver tudo</button>
-  <button type="button" (click)="arrange()">Organizar</button>
   <button type="button" (click)="exportPng()">Exportar PNG</button>
   <search>
     <form [style.display]="'flex'" [style.flexDirection]="'column'" (submit)="$event.preventDefault()">
@@ -25,6 +21,22 @@
   </span>
 </header>
 <main>
+  <nav aria-label="Ações do mapa" (keydown.escape)="actionsOpen.set(false); fab.focus()">
+    <!-- FAB first in the DOM so Tab goes FAB → actions; CSS stacks the list above it. -->
+    <button #fab type="button" class="fab" aria-controls="map-actions" [attr.aria-expanded]="actionsOpen()"
+      aria-label="Mostrar ações" (click)="actionsOpen.update(o => !o)">
+      <span aria-hidden="true">{{ actionsOpen() ? '✕' : '…' }}</span>
+    </button>
+    @if (actionsOpen()) {
+      <ul id="map-actions">
+        <!-- aria-disabled, not disabled: a disabled button drops keyboard focus to <body>. -->
+        <li><button type="button" class="fab" aria-label="Desfazer" title="Desfazer" [attr.aria-disabled]="!flow()?.canUndo()" (click)="flow()?.canUndo() && flow()?.undo()"><span aria-hidden="true">↶</span></button></li>
+        <li><button type="button" class="fab" aria-label="Refazer" title="Refazer" [attr.aria-disabled]="!flow()?.canRedo()" (click)="flow()?.canRedo() && flow()?.redo()"><span aria-hidden="true">↷</span></button></li>
+        <li><button type="button" class="fab" aria-label="Ver tudo" title="Ver tudo" (click)="flow()?.fitView()"><span aria-hidden="true">⤢</span></button></li>
+        <li><button type="button" class="fab" aria-label="Organizar" title="Organizar" (click)="arrange()"><span aria-hidden="true">☷</span></button></li>
+      </ul>
+    }
+  </nav>
   <ngx-node-flow
     [nodes]="nodes"
     [edges]="edges"
