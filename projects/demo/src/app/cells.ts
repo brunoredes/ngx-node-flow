@@ -22,28 +22,28 @@ export const ZOOM_MAX = 100;
 export const kindOf = (n: FlowNode): CellKind | undefined => (n.data as Partial<CellData> | undefined)?.kind;
 
 export const initialNodes: FlowNode[] = [
-  { id: 'color', x: 40, y: 40, label: 'Cor', outputs: [{ id: 'cor', type: 'color' }], data: { kind: 'color', value: '#3b82f6' } },
-  { id: 'shape', x: 40, y: 150, label: 'Forma', outputs: [{ id: 'forma', type: 'shape' }], data: { kind: 'shape', value: 'circle' } },
-  { id: 'zoom', x: 40, y: 260, label: 'Zoom', outputs: [{ id: 'zoom', type: 'zoom' }], data: { kind: 'zoom', value: 50 } },
-  {
-    id: 'result',
-    x: 360,
-    y: 130,
-    label: 'Resultado',
-    // typed and single-connection: a shape cannot feed the color input, nor two colors the same input
-    inputs: [
-      { id: 'cor', type: 'color', maxConnections: 1 },
-      { id: 'forma', type: 'shape', maxConnections: 1 },
-      { id: 'zoom', type: 'zoom', maxConnections: 1 },
-    ],
-    data: { kind: 'result' },
-  },
+  // { id: 'color', x: 40, y: 40, label: 'Cor', outputs: [{ id: 'cor', type: 'color' }], data: { kind: 'color', value: '#3b82f6' } },
+  // { id: 'shape', x: 40, y: 150, label: 'Forma', outputs: [{ id: 'forma', type: 'shape' }], data: { kind: 'shape', value: 'circle' } },
+  // { id: 'zoom', x: 40, y: 260, label: 'Zoom', outputs: [{ id: 'zoom', type: 'zoom' }], data: { kind: 'zoom', value: 50 } },
+  // {
+  //   id: 'result',
+  //   x: 360,
+  //   y: 130,
+  //   label: 'Resultado',
+  //   // typed and single-connection: a shape cannot feed the color input, nor two colors the same input
+  //   inputs: [
+  //     { id: 'cor', type: 'color', maxConnections: 1 },
+  //     { id: 'forma', type: 'shape', maxConnections: 1 },
+  //     { id: 'zoom', type: 'zoom', maxConnections: 1 },
+  //   ],
+  //   data: { kind: 'result' },
+  // },
 ];
 
 export const initialEdges: FlowEdge[] = [
-  { id: 'e-color', source: 'color', sourcePort: 'cor', target: 'result', targetPort: 'cor' },
-  { id: 'e-shape', source: 'shape', sourcePort: 'forma', target: 'result', targetPort: 'forma' },
-  { id: 'e-zoom', source: 'zoom', sourcePort: 'zoom', target: 'result', targetPort: 'zoom' },
+  // { id: 'e-color', source: 'color', sourcePort: 'cor', target: 'result', targetPort: 'cor' },
+  // { id: 'e-shape', source: 'shape', sourcePort: 'forma', target: 'result', targetPort: 'forma' },
+  // { id: 'e-zoom', source: 'zoom', sourcePort: 'zoom', target: 'result', targetPort: 'zoom' },
 ];
 
 export interface ResultValue {

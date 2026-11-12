@@ -5,10 +5,9 @@ import { generateGraph } from './generate-graph';
 import { geojsonGraph } from './geojson-graph';
 import { layered } from 'ngx-node-flow/layout';
 import { NodeEditor } from './node-editor';
-import { ResultPreview } from './result-preview';
 
 @Component({
-  imports: [NodeFlow, NodeFlowEditor, NodeEditor, ResultPreview],
+  imports: [NodeFlow, NodeFlowEditor, NodeEditor],
   selector: 'app-root',
   styleUrl: './app.css',
   templateUrl: './app.html',
