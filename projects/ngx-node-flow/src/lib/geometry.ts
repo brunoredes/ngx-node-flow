@@ -79,3 +79,27 @@ export function distToPolyline(pts: number[], x: number, y: number): number {
   }
   return best;
 }
+
+export interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * Alignment guides: the offset that lines up an edge or center of `r` with one of `others`, per axis,
+ * when it is within `tol`. vx / hy are the world x of the vertical guide and y of the horizontal one.
+ */
+export function align(r: Rect, others: Iterable<Rect>, tol: number): { dx: number; dy: number; vx?: number; hy?: number } {
+  let dx = 0, dy = 0, vx: number | undefined, hy: number | undefined, bx = tol, by = tol;
+  const mine = (a: number, size: number) => [a, a + size / 2, a + size];
+  for (const o of others) {
+    for (const t of mine(o.x, o.w)) for (const s of mine(r.x, r.w)) if (Math.abs(t - s) < bx) [bx, dx, vx] = [Math.abs(t - s), t - s, t];
+    for (const t of mine(o.y, o.h)) for (const s of mine(r.y, r.h)) if (Math.abs(t - s) < by) [by, dy, hy] = [Math.abs(t - s), t - s, t];
+  }
+  return { dx, dy, vx, hy };
+}
+
+/** Minimap size in CSS px (bottom-right corner). */
+export const MINIMAP = { w: 200, h: 140 };

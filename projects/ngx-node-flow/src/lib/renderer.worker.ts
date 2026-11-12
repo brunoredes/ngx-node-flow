@@ -1,6 +1,6 @@
 /// Runs inside a Worker: owns the canvases, camera and interaction state.
 /// Bundled to a string by scripts/build-worker.mjs (see worker-source.ts).
-import { bezier, Camera, distToPolyline, nodeHeight, portPos, Side, toWorld, zoomAt } from './geometry';
+import { align, bezier, Camera, distToPolyline, MINIMAP, nodeHeight, portPos, Side, toWorld, zoomAt } from './geometry';
 import { GlRenderer, RECT_STRIDE, RGBA } from './gl';
 import { cloneGraph, GraphStore, noChanges } from './store';
 import { Command, FlowEdge, FlowNode, FromWorker, GraphChanges, GraphChunk, GraphSnapshot, NodeFlowConfig, ResolvedTheme, ToWorker } from './types';
@@ -15,6 +15,8 @@ let theme: ResolvedTheme;
 let renderer: GlRenderer;
 let text: OffscreenCanvasRenderingContext2D;
 let glCanvas: OffscreenCanvas;
+let mini: OffscreenCanvasRenderingContext2D;
+let minimapOn = true;
 let width = 1, height = 1, dpr = 1;
 let cam: Camera = { x: 0, y: 0, zoom: 1 };
 let store: GraphStore;
@@ -35,7 +37,17 @@ type Drag =
   | { kind: 'pan'; sx: number; sy: number }
   | { kind: 'marquee'; x0: number; y0: number; x1: number; y1: number }
   /** group: nodes that move with the pointer and where they started (empty when readonly or all locked). */
-  | { kind: 'node'; node: FlowNode; toggle: boolean; sx: number; sy: number; group: { id: string; x: number; y: number }[]; moved: boolean }
+  | {
+      kind: 'node';
+      node: FlowNode;
+      toggle: boolean;
+      sx: number;
+      sy: number;
+      group: { id: string; x: number; y: number }[];
+      moved: boolean;
+      /** Active alignment guides (world x of the vertical line, y of the horizontal one). */
+      guide?: { vx?: number; hy?: number };
+    }
   | { kind: 'link'; node: FlowNode; side: Side; port: string; wx: number; wy: number; detached?: FlowEdge };
 let drag: Drag | null = null;
 
@@ -43,6 +55,8 @@ let rects = new Float32Array(0);
 let lines = new Float32Array(0);
 /** Edges drawn in the last frame: what a click can hit. */
 let drawnEdges: FlowEdge[] = [];
+/** Nodes drawn in the last frame: what alignment guides snap to. */
+let drawnNodes: FlowNode[] = [];
 
 const send = (msg: FromWorker) => postMessage(msg);
 
@@ -130,7 +144,8 @@ function render() {
   const visible = store.query(tl.x - m, tl.y - m, br.x + m, br.y + m);
   const showPorts = cam.zoom >= 0.3;
 
-  let rectCount = visible.length + 2; // + focus ring + selection rectangle
+  drawnNodes = visible;
+  let rectCount = visible.length + 4; // + focus ring, selection rectangle, two guide lines
   if (showPorts) for (const n of visible) rectCount += (n.inputs?.length ?? 0) + (n.outputs?.length ?? 0);
   if (rects.length < rectCount * RECT_STRIDE) rects = new Float32Array(rectCount * RECT_STRIDE * 2);
 
@@ -156,6 +171,11 @@ function render() {
         pushRect(ri++, pos.x - r, pos.y - r, 2 * r, 2 * r, ok ? portColor : dimPort, r);
       }
     }
+  }
+  if (drag?.kind === 'node' && drag.guide) {
+    const { vx, hy } = drag.guide, px = 1 / cam.zoom, guide = withAlpha(accent, 0.8);
+    if (vx !== undefined) pushRect(ri++, vx - px / 2, tl.y, px, br.y - tl.y, guide, 0);
+    if (hy !== undefined) pushRect(ri++, tl.x, hy - px / 2, br.x - tl.x, px, guide, 0);
   }
   if (drag?.kind === 'marquee') {
     const { x0, y0, x1, y1 } = drag;
@@ -200,9 +220,70 @@ function render() {
     accentFrom, accentColor: accent,
   });
   drawText(visible);
+  if (minimapOn) drawMinimap(tl, br);
   reportSelection();
   reportFocus();
   reportStats();
+}
+
+// --- minimap: a density image of the whole graph (redrawn at most every MINI_MS), plus the viewport box
+const MINI_MS = 250;
+let miniImage: ImageData | null = null;
+let miniRev = -1, miniAt = 0;
+/** world -> minimap px: px = (world - x0) * s + o */
+let miniMap = { x0: 0, y0: 0, s: 1, ox: 0, oy: 0 };
+
+function drawMinimap(tl: { x: number; y: number }, br: { x: number; y: number }) {
+  const W = mini.canvas.width, H = mini.canvas.height;
+  if (store.revision !== miniRev) {
+    const wait = miniAt + MINI_MS - performance.now();
+    if (wait > 0) setTimeout(schedule, wait); // throttled: one more frame once the window passes
+    else {
+      miniRev = store.revision;
+      miniAt = performance.now();
+      miniImage = rasterize(W, H);
+    }
+  }
+  mini.fillStyle = theme.surface;
+  mini.fillRect(0, 0, W, H);
+  if (miniImage) mini.putImageData(miniImage, 0, 0);
+  const { x0, y0, s, ox, oy } = miniMap;
+  mini.strokeStyle = theme.accent;
+  mini.lineWidth = dpr;
+  mini.strokeRect((tl.x - x0) * s + ox, (tl.y - y0) * s + oy, (br.x - tl.x) * s, (br.y - tl.y) * s);
+}
+
+/** One pixel per occupied cell, more opaque where nodes pile up. */
+function rasterize(W: number, H: number): ImageData | null {
+  const b = store.bounds();
+  if (!b) return null;
+  const pad = 4 * dpr, bw = b.x1 - b.x0 || 1, bh = b.y1 - b.y0 || 1;
+  const s = Math.min((W - 2 * pad) / bw, (H - 2 * pad) / bh);
+  miniMap = { x0: b.x0, y0: b.y0, s, ox: (W - bw * s) / 2, oy: (H - bh * s) / 2 };
+  const counts = new Uint16Array(W * H);
+  const { ox, oy } = miniMap;
+  store.eachPosition((x, y) => {
+    const px = Math.floor((x - b.x0) * s + ox), py = Math.floor((y - b.y0) * s + oy);
+    const i = py * W + px;
+    if (px >= 0 && py >= 0 && px < W && py < H && counts[i] < 65535) counts[i]++;
+  });
+  const img = new ImageData(W, H);
+  const [r, g, bl] = rgba(theme.text);
+  for (let i = 0; i < counts.length; i++) {
+    if (!counts[i]) continue;
+    img.data[i * 4] = r * 255;
+    img.data[i * 4 + 1] = g * 255;
+    img.data[i * 4 + 2] = bl * 255;
+    img.data[i * 4 + 3] = Math.min(255, 110 + counts[i] * 30);
+  }
+  return img;
+}
+
+/** Centers the view on the world point under a minimap position (CSS px). */
+function minimapTo(x: number, y: number) {
+  const { x0, y0, s, ox, oy } = miniMap;
+  const wx = (x * dpr - ox) / s + x0, wy = (y * dpr - oy) / s + y0;
+  cam = { zoom: cam.zoom, x: width / 2 - wx * cam.zoom, y: height / 2 - wy * cam.zoom };
 }
 
 function drawText(visible: FlowNode[]) {
@@ -312,7 +393,7 @@ function onPointer(kind: 'down' | 'move' | 'up' | 'cancel', sx: number, sy: numb
       drag.y1 = w.y;
     } else if (drag.kind === 'node') {
       if (!drag.group.length) return;
-      const dx = w.x - drag.sx, dy = w.y - drag.sy;
+      const { dx, dy } = placeGroup(drag, w.x - drag.sx, w.y - drag.sy);
       for (const g of drag.group) store.move(g.id, g.x + dx, g.y + dy);
       drag.moved = true;
     } else {
@@ -348,6 +429,26 @@ function onPointer(kind: 'down' | 'move' | 'up' | 'cancel', sx: number, sy: numb
     return; // hover move with no drag: nothing changed
   }
   schedule();
+}
+
+/**
+ * Where a dragged group goes for a raw pointer offset: the dragged node snaps to the grid (grid.snap),
+ * then to edges/centers of the other nodes on screen (grid.guides), and the rest of the group follows.
+ */
+function placeGroup(d: Extract<Drag, { kind: 'node' }>, dx: number, dy: number): { dx: number; dy: number } {
+  const a = d.group.find((g) => g.id === d.node.id) ?? d.group[0];
+  let x = a.x + dx, y = a.y + dy;
+  const step = cfg.grid.size;
+  if (cfg.grid.snap) [x, y] = [Math.round(x / step) * step, Math.round(y / step) * step];
+  d.guide = undefined;
+  if (cfg.grid.guides) {
+    const moving = new Set(d.group.map((g) => g.id));
+    const others = drawnNodes.filter((n) => !moving.has(n.id)).map((n) => ({ x: n.x, y: n.y, w: cfg.node.width, h: nodeHeight(n, cfg) }));
+    const g = align({ x, y, w: cfg.node.width, h: nodeHeight(d.node, cfg) }, others, 6 / cam.zoom);
+    [x, y] = [x + g.dx, y + g.dy];
+    if (g.vx !== undefined || g.hy !== undefined) d.guide = { vx: g.vx, hy: g.hy };
+  }
+  return { dx: x - a.x, dy: y - a.y };
 }
 
 /** Applies the rules to a new edge, then either commits it or (with canConnect) asks the main thread first. */
@@ -623,6 +724,8 @@ function run(command: Command): unknown {
       return;
     case 'snapshot':
       return store.snapshot();
+    case 'find':
+      return store.find(command.text, command.limit);
     case 'fit': {
       const b = store.bounds();
       if (b) frame(b.x0, b.y0, b.x1, b.y1, command.padding);
@@ -717,6 +820,7 @@ addEventListener('message', (e: MessageEvent<ToWorker>) => {
       if (!gl) return send({ type: 'error', message: 'ngx-node-flow: WebGL2 not available' });
       store = new GraphStore(cfg);
       text = m.text.getContext('2d')!;
+      mini = m.mini.getContext('2d')!;
       // GPU reset: the graph survives in the store; GL objects are rebuilt when the context returns
       glCanvas.addEventListener('webglcontextlost', (ev) => ev.preventDefault());
       glCanvas.addEventListener('webglcontextrestored', () => {
@@ -732,12 +836,16 @@ addEventListener('message', (e: MessageEvent<ToWorker>) => {
         c.width = Math.max(1, Math.round(width * dpr));
         c.height = Math.max(1, Math.round(height * dpr));
       }
+      mini.canvas.width = Math.round(MINIMAP.w * dpr);
+      mini.canvas.height = Math.round(MINIMAP.h * dpr);
+      miniRev = -1; // new pixel size: rasterize again
       break;
     case 'data':
       store.reset(m.nodes, m.edges);
       drag = null; // dragged objects were replaced
       pendingLink = null;
       clearHistory();
+      miniRev = -1;
       selectOnly([...selNodes].filter((id) => store.node(id)), [...selEdges].filter((id) => store.hasEdge(id)));
       if (focused && !store.node(focused)) focused = null;
       if (!store.nodeCount) cam = { x: 0, y: 0, zoom: 1 };
@@ -753,7 +861,7 @@ addEventListener('message', (e: MessageEvent<ToWorker>) => {
       ingest(m.stream).then(() => reply(m.reqId), (err) => fail(m.reqId, err));
       return;
     case 'mode':
-      ({ readonly, canConnect } = m);
+      ({ readonly, canConnect, minimap: minimapOn } = m);
       if (readonly && drag?.kind === 'link') onPointer('cancel', 0, 0);
       break;
     case 'theme':
@@ -762,6 +870,9 @@ addEventListener('message', (e: MessageEvent<ToWorker>) => {
       break;
     case 'pointer':
       return onPointer(m.kind, m.x, m.y, m.toggle);
+    case 'minimap':
+      minimapTo(m.x, m.y);
+      break;
     case 'view':
       cam = zoomAt({ ...cam, x: cam.x + m.panX, y: cam.y + m.panY }, m.x, m.y, m.zoom, cfg.zoom.min, cfg.zoom.max);
       break;

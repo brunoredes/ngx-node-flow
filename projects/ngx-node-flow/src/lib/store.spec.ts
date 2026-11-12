@@ -293,6 +293,18 @@ describe('copy and paste', () => {
   });
 });
 
+describe('find', () => {
+  it('matches labels case-insensitively, up to the limit, skipping removed nodes', () => {
+    const s = store();
+    expect(s.find('b', 10)).toEqual([{ id: 'b', label: 'B' }]);
+    s.remove('b');
+    expect(s.find('B', 10)).toEqual([]);
+    expect(s.find('', 10)).toEqual([]);
+    const many = store(Array.from({ length: 5 }, (_, i) => ({ ...a(), id: `n${i}`, label: `Step ${i}` })), []);
+    expect(many.find('step', 2).map((n) => n.id)).toEqual(['n0', 'n1']);
+  });
+});
+
 describe('applyChanges', () => {
   it('upserts and removes', () => {
     const g = applyChanges([a(), b()], [ab], { upsertNodes: [{ ...a(), x: 9 }], removeNodes: ['b'], upsertEdges: [], removeEdges: ['ab'] });

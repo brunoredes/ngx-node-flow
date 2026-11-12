@@ -57,6 +57,8 @@ export class GraphStore {
   private grid = new Map<number, number[]>();
   private z = new Map<number, number>();
   private zTop = 0;
+  /** Bumped whenever a node is added, moved, replaced or removed. */
+  revision = 0;
   // open transaction: state of each touched node/edge before its first change (null = did not exist)
   private tx: { nodes: Map<string, FlowNode | null>; edges: Map<string, FlowEdge | null> } | null = null;
   private txDepth = 0;
@@ -201,6 +203,7 @@ export class GraphStore {
   }
 
   private touchNode(s: number) {
+    this.revision++;
     const id = this.nId[s];
     if (this.tx && !this.tx.nodes.has(id)) this.tx.nodes.set(id, this.nAlive[s] ? this.mat(s) : null);
   }
@@ -307,6 +310,21 @@ export class GraphStore {
     }
     if (this.z.size) hits.sort((a, b) => (this.z.get(a) ?? 0) - (this.z.get(b) ?? 0));
     return hits.map((s) => this.mat(s));
+  }
+
+/** Up to `limit` live nodes whose label contains `text` (case-insensitive), in slot order. */
+  find(text: string, limit: number): { id: string; label: string }[] {
+    const q = text.trim().toLowerCase(), out: { id: string; label: string }[] = [];
+    if (!q) return out;
+    for (let s = 0; s < this.nId.length && out.length < limit; s++) {
+      if (this.nAlive[s] && this.nLabel[s].toLowerCase().includes(q)) out.push({ id: this.nId[s], label: this.nLabel[s] });
+    }
+    return out;
+  }
+
+  /** Calls `fn` with the top-left of every live node, without building node objects. */
+  eachPosition(fn: (x: number, y: number) => void) {
+    for (let s = 0; s < this.nId.length; s++) if (this.nAlive[s]) fn(this.nx[s], this.ny[s]);
   }
 
   hasEdge(id: string): boolean {

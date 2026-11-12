@@ -37,9 +37,15 @@ Imperative API (on the component instance, e.g. via `viewChild(NodeFlow)`):
 |---|---|
 | `snapshot()` | resolves the whole graph as `{ nodes, edges }`: persist without folding every `graphChange` |
 | `fitView({ padding? })`, `centerOn(id)`, `zoomTo(zoom)` | moves the camera |
+| `findNodes(text, limit?)` | up to `limit` (20) nodes whose label contains `text`, case-insensitive; a linear scan in the worker (tens of ms at 1M nodes) |
 | `select(ids)` | selects nodes (`[]` clears); `(selectionChange)` reports `{ nodes, edges }` |
 | `undo()`, `redo()`, `canUndo()`, `canRedo()` | history of the last 100 user actions, kept in the worker; undo/redo report through `graphChange`. Replacing `nodes`/`edges` clears it |
 | `load(source)` | streams a large graph in chunks |
+
+Navigation and layout aids:
+
+- `[minimap]="true"` (default) shows the whole graph in the bottom-right corner, drawn in the worker as a density image (redrawn at most 4 times a second while the graph changes). Click or drag in it to move the view.
+- `provideNodeFlow({ grid: { snap: true } })` drops dragged nodes on grid points. `grid.guides` (on by default) snaps a dragged node to the edges and centers of the nodes on screen and draws the guide line; it wins over grid snapping.
 
 Selection and keyboard: click selects; Shift/Ctrl/Cmd+click toggles; Shift+drag on empty space draws a selection rectangle; dragging a selected node moves the whole selection; clicking an edge selects it. The component is one focusable widget (`role="application"`, described by `labels.keyboardHelp`), and a live region announces the focused node:
 

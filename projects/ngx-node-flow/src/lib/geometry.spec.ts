@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { DEFAULT_NODE_FLOW_CONFIG as cfg, NODE_FLOW_CONFIG, provideNodeFlow } from './config';
-import { bezier, distToPolyline, hitTest, portPos, toWorld, zoomAt } from './geometry';
+import { align, bezier, distToPolyline, hitTest, portPos, toWorld, zoomAt } from './geometry';
 import { FlowNode } from './types';
 
 describe('provideNodeFlow', () => {
@@ -59,5 +59,18 @@ describe('distToPolyline', () => {
 
   it('handles a degenerate segment', () => {
     expect(distToPolyline([1, 1, 1, 1], 4, 5)).toBe(5);
+  });
+});
+
+describe('align', () => {
+  const o = { x: 100, y: 100, w: 160, h: 60 };
+  it('snaps the closest edge or center within tolerance, per axis', () => {
+    expect(align({ x: 103, y: 300, w: 160, h: 60 }, [o], 6)).toEqual({ dx: -3, dy: 0, vx: 100, hy: undefined });
+    // x edges 200, 280, 360 are all >= 20 px from 100, 180, 260: no vertical guide
+    expect(align({ x: 200, y: 98, w: 160, h: 60 }, [o], 6)).toEqual({ dx: 0, dy: 2, vx: undefined, hy: 100 });
+  });
+
+  it('ignores anything farther than the tolerance', () => {
+    expect(align({ x: 120, y: 200, w: 160, h: 60 }, [o], 6)).toEqual({ dx: 0, dy: 0, vx: undefined, hy: undefined });
   });
 });

@@ -16,6 +16,7 @@ import {
   WritableSignal,
 } from '@angular/core';
 import { NODE_FLOW_CONFIG } from './config';
+import { MINIMAP } from './geometry';
 import { resolveTheme, themeStyles, watchTheme } from './theme';
 import { iterate, toReadableStream } from './stream';
 import { NodeFlowEditor } from './node-flow-editor';
@@ -34,6 +35,18 @@ type Selection = Extract<FromWorker, { type: 'selection' }> & { id: string };
     <span #probe hidden></span>
     <p class="nf-sr" [id]="helpId">{{ l.keyboardHelp }}</p>
     <p class="nf-sr" aria-live="polite">{{ announcement() }}</p>
+    <!-- pointer shortcut only: keyboard users have arrows and fitView() -->
+    <canvas
+      #mini
+      class="nf-minimap"
+      aria-hidden="true"
+      [hidden]="!minimap()"
+      [style.width.px]="miniSize.w"
+      [style.height.px]="miniSize.h"
+      (pointerdown)="minimapPointer($event)"
+      (pointermove)="$event.buttons && minimapPointer($event)"
+      (wheel)="$event.stopPropagation()"
+    ></canvas>
 
     @if (!draft() && !readonly() && selection(); as s) {
       <div
@@ -107,6 +120,7 @@ type Selection = Extract<FromWorker, { type: 'selection' }> & { id: string };
     .nf-sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
     canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
     canvas + canvas { pointer-events: none; }
+    .nf-minimap { inset: auto 12px 12px auto; border: 1px solid var(--__nf-border); border-radius: calc(var(--__nf-radius) / 2); cursor: crosshair; }
     .nf-overlay { position: absolute; color: var(--__nf-text); background: var(--__nf-surface); font: 14px var(--__nf-font-family); }
     button { font: inherit; color: inherit; cursor: pointer; border-radius: calc(var(--__nf-radius) * 0.75); }
     button:focus-visible { outline: 2px solid var(--__nf-accent); outline-offset: 1px; }
@@ -156,6 +170,8 @@ export class NodeFlow {
   readonly beforeRemove = input<(node: FlowNode) => boolean | Promise<boolean>>();
   /** View-only: pan, zoom and select still work; nothing in the graph can change. */
   readonly readonly = input(false);
+  /** Overview of the whole graph in the bottom-right corner; click or drag in it to move the view. */
+  readonly minimap = input(true);
   /**
    * Last word on a connection the user drops, after the declarative rules (edge.compatibility, maxConnections,
    * allowCycles) passed. Return false (or resolve false) to refuse it: edgeRejected fires with reason 'custom'.
@@ -208,6 +224,8 @@ export class NodeFlow {
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef).nativeElement;
   private readonly glCanvas = viewChild.required<ElementRef<HTMLCanvasElement>>('gl');
   private readonly textCanvas = viewChild.required<ElementRef<HTMLCanvasElement>>('text');
+  private readonly miniCanvas = viewChild.required<ElementRef<HTMLCanvasElement>>('mini');
+  protected readonly miniSize = MINIMAP;
   private readonly sheet = viewChild<ElementRef<HTMLElement>>('sheet');
   private readonly probe = viewChild.required<ElementRef<HTMLElement>>('probe');
   private readonly worker = signal<Worker | undefined>(undefined);
@@ -223,7 +241,7 @@ export class NodeFlow {
       const worker = this.worker(), nodes = this.nodes(), edges = this.edges();
       worker?.postMessage({ type: 'data', nodes, edges } satisfies ToWorker);
     });
-    effect(() => this.worker()?.postMessage({ type: 'mode', readonly: this.readonly(), canConnect: !!this.canConnect() } satisfies ToWorker));
+    effect(() => this.worker()?.postMessage({ type: 'mode', readonly: this.readonly(), canConnect: !!this.canConnect(), minimap: this.minimap() } satisfies ToWorker));
 
     // Browser-only (skipped on SSR): canvases must exist before transferring them.
     afterNextRender(() => {
@@ -237,7 +255,8 @@ export class NodeFlow {
       const text = this.textCanvas().nativeElement.transferControlToOffscreen();
       const resolve = () => resolveTheme(this.probe().nativeElement, Object.keys(this.config.theme) as (keyof NodeFlowTheme)[]);
       let theme = resolve();
-      worker.postMessage({ type: 'init', gl, text, config: this.config, theme } satisfies ToWorker, [gl, text]);
+      const mini = this.miniCanvas().nativeElement.transferControlToOffscreen();
+      worker.postMessage({ type: 'init', gl, text, mini, config: this.config, theme } satisfies ToWorker, [gl, text, mini]);
       const unwatch = watchTheme(this.host, () => {
         const next = resolve();
         if (JSON.stringify(next) === JSON.stringify(theme)) return;
@@ -282,6 +301,18 @@ export class NodeFlow {
   }
 
   /** The whole graph as the worker holds it now: the way to persist without folding every graphChange. */
+  /** Up to `limit` nodes whose label contains `text` (case-insensitive). Pair with centerOn() and select(). */
+  findNodes(text: string, limit = 20): Promise<{ id: string; label: string }[]> {
+    return this.command({ op: 'find', text, limit });
+  }
+
+  protected minimapPointer(e: PointerEvent) {
+    e.stopPropagation(); // not a canvas pan/select
+    const el = e.currentTarget as HTMLElement, r = el.getBoundingClientRect();
+    if (e.type === 'pointerdown') el.setPointerCapture(e.pointerId);
+    this.post({ type: 'minimap', x: e.clientX - r.left, y: e.clientY - r.top });
+  }
+
   snapshot(): Promise<GraphSnapshot> {
     return this.command({ op: 'snapshot' });
   }

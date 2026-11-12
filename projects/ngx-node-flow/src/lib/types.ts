@@ -61,7 +61,11 @@ export interface NodeFlowTheme {
 export type ResolvedTheme = Record<keyof NodeFlowTheme, string>;
 
 export interface NodeFlowConfig {
-  grid: { size: number; visible: boolean };
+  /**
+   * snap: dragged nodes land on grid points. guides: while dragging, nodes snap to the edges and
+   * centers of nodes on screen, with a guide line (wins over grid snapping within a few px).
+   */
+  grid: { size: number; visible: boolean; snap: boolean; guides: boolean };
   node: { width: number; height: number; radius: number; portRadius: number; fontSize: number };
   /**
    * Rules for edges the user drags (loaded data is not checked):
@@ -125,6 +129,7 @@ export type Command =
   | { op: 'getNode'; id: string }
   | { op: 'chunk'; chunk: GraphChunk }
   | { op: 'snapshot' }
+  | { op: 'find'; text: string; limit: number }
   | { op: 'fit'; padding: number }
   | { op: 'center'; id: string }
   | { op: 'zoom'; zoom: number }
@@ -145,7 +150,9 @@ export type Command =
   | { op: 'redo' };
 
 export type ToWorker =
-  | { type: 'init'; gl: OffscreenCanvas; text: OffscreenCanvas; config: NodeFlowConfig; theme: ResolvedTheme }
+  | { type: 'init'; gl: OffscreenCanvas; text: OffscreenCanvas; mini: OffscreenCanvas; config: NodeFlowConfig; theme: ResolvedTheme }
+  /** Pointer on the minimap (CSS px inside it): centers the view there. */
+  | { type: 'minimap'; x: number; y: number }
   | { type: 'resize'; width: number; height: number; dpr: number }
   | { type: 'data'; nodes: FlowNode[]; edges: FlowEdge[] }
   /** toggle: shift/ctrl/cmd held, adds to or removes from the selection (and drags a selection rectangle on empty space). */
@@ -153,7 +160,7 @@ export type ToWorker =
   /** Pans by (panX, panY) CSS px, then zooms by factor `zoom` around (x, y). */
   | { type: 'view'; x: number; y: number; zoom: number; panX: number; panY: number }
   | { type: 'theme'; theme: ResolvedTheme }
-  | { type: 'mode'; readonly: boolean; canConnect: boolean }
+  | { type: 'mode'; readonly: boolean; canConnect: boolean; minimap: boolean }
   | { type: 'command'; reqId: number; command: Command }
   | { type: 'stream'; reqId: number; stream: ReadableStream<GraphChunk> };
 

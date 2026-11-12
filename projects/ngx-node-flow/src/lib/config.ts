@@ -19,7 +19,7 @@ export const DEFAULT_NODE_FLOW_THEME: NodeFlowTheme = {
 };
 
 export const DEFAULT_NODE_FLOW_CONFIG: NodeFlowConfig = {
-  grid: { size: 20, visible: true },
+  grid: { size: 20, visible: true, snap: false, guides: true },
   node: { width: 160, height: 60, radius: 8, portRadius: 6, fontSize: 13 },
   edge: { width: 2, allowCycles: true },
   zoom: { min: 0.1, max: 4 },
