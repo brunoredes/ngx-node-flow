@@ -4,6 +4,7 @@
     <button type="button" (click)="cancel()">Cancelar</button>
   } @else {
     <button type="button" (click)="addMany()">Adicionar 1M nós</button>
+    <button type="button" (click)="addParcels()">Carregar giant.json</button>
   }
   <button type="button" [disabled]="!flow()?.canUndo()" (click)="flow()?.undo()">Desfazer</button>
   <button type="button" [disabled]="!flow()?.canRedo()" (click)="flow()?.redo()">Refazer</button>
