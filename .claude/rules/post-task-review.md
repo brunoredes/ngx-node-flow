@@ -16,7 +16,7 @@ After any task that changes code is finished — whether you did it directly or 
 | `code-reviewer` | always | correctness, type safety, security, maintainability, adherence to project conventions |
 | `accessibility-tester` | only if the change touches UI: `.html`, `.tsx`, `.jsx`, `.vue`, `.svelte`, `.css`, `.scss`, Angular components/templates, web components, or anything rendered to users | WCAG 2.2 AA conformance of the changed UI: semantics, keyboard, focus, names/roles/states, contrast, error handling |
 
-If one of these agents is not available in `.claude/agents/`, say so to the user and continue with the others. Never simulate a missing agent's review yourself.
+If one of these agents is not available in `.claude/skills/`, say so to the user and continue with the others. Never simulate a missing agent's review yourself.
 
 ## How to run the round
 
