@@ -28,7 +28,7 @@ export function zoomAt(c: Camera, sx: number, sy: number, factor: number, min: n
   return { zoom, x: sx - w.x * zoom, y: sy - w.y * zoom };
 }
 
-export function nodeHeight(n: FlowNode, cfg: NodeFlowConfig): number {
+export function nodeHeight(n: Pick<FlowNode, 'inputs' | 'outputs'>, cfg: NodeFlowConfig): number {
   const ports = Math.max(n.inputs?.length ?? 0, n.outputs?.length ?? 0);
   return Math.max(cfg.node.height, HEADER + ports * PORT_SPACING);
 }

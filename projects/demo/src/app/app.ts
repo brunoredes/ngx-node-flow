@@ -1,34 +1,33 @@
-import { Component, DOCUMENT, inject, signal, viewChild } from '@angular/core';
-import { FlowEdge, FlowNode, NodeFlow, NodeFlowEditor } from 'ngx-node-flow';
+import { Component, computed, DOCUMENT, inject, signal, viewChild } from '@angular/core';
+import { applyChanges, GraphChanges, NodeFlow, NodeFlowEditor } from 'ngx-node-flow';
+import { initialEdges, initialNodes, resolveResult } from './cells';
 import { generateGraph } from './generate-graph';
 import { NodeEditor } from './node-editor';
+import { ResultPreview } from './result-preview';
 
 @Component({
-  imports: [NodeFlow, NodeFlowEditor, NodeEditor],
+  imports: [NodeFlow, NodeFlowEditor, NodeEditor, ResultPreview],
   selector: 'app-root',
   styleUrl: './app.css',
   templateUrl: './app.html',
 })
 export class App {
-  protected readonly nodes = signal<FlowNode[]>([
-    { id: 'src', x: 40, y: 80, label: 'Source', root: true, outputs: ['data'] },
-    { id: 'map', x: 300, y: 40, label: 'Map', inputs: ['in'], outputs: ['out'] },
-    { id: 'filter', x: 300, y: 180, label: 'Filter', inputs: ['in'], outputs: ['pass', 'fail'], color: '#553c9a' },
-    { id: 'merge', x: 560, y: 100, label: 'Merge', inputs: ['a', 'b'], outputs: ['out'] },
-    { id: 'sink', x: 820, y: 120, label: 'Sink', inputs: ['in'] },
-  ]);
-  protected readonly edges = signal<FlowEdge[]>([
-    { id: 'e1', source: 'src', sourcePort: 'data', target: 'map', targetPort: 'in' },
-    { id: 'e2', source: 'src', sourcePort: 'data', target: 'filter', targetPort: 'in' },
-    { id: 'e3', source: 'map', sourcePort: 'out', target: 'merge', targetPort: 'a' },
-    { id: 'e4', source: 'merge', sourcePort: 'out', target: 'sink', targetPort: 'in' },
-  ]);
+  /** Initial graph only: the worker owns it from here on. */
+  protected readonly nodes = initialNodes;
+  protected readonly edges = initialEdges;
+  /** Our copy of the graph, kept by folding graphChange (feeding it back to [nodes] would reset the worker). */
+  private readonly graph = signal({ nodes: initialNodes, edges: initialEdges });
+  protected readonly result = computed(() => resolveResult(this.graph().nodes, this.graph().edges));
   protected readonly lastEvent = signal('');
   protected readonly light = signal(false);
   protected readonly flow = viewChild(NodeFlow);
   private readonly document = inject(DOCUMENT);
   private abort: AbortController | null = null;
   private batch = 0;
+
+  protected onGraphChange(change: GraphChanges) {
+    this.graph.update((g) => applyChanges(g.nodes, g.edges, change));
+  }
 
   protected toggleTheme() {
     this.light.update((v) => !v);

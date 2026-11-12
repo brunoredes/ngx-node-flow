@@ -42,4 +42,11 @@ describe('stream helpers', () => {
     ctrl.abort();
     await expect(r2.read()).rejects.toBeDefined();
   });
+
+  it('detaches the abort listener once the source ends', async () => {
+    const ctrl = new AbortController();
+    const remove = vi.spyOn(ctrl.signal, 'removeEventListener');
+    for await (const _ of iterate(toReadableStream(counter([], 2), ctrl.signal)));
+    expect(remove).toHaveBeenCalledWith('abort', expect.any(Function));
+  });
 });

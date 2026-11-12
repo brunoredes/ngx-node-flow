@@ -30,18 +30,18 @@ let lines = new Float32Array(0);
 const send = (msg: FromWorker) => postMessage(msg);
 
 const colorCache = new Map<string, RGBA>();
+let swatch: OffscreenCanvasRenderingContext2D | undefined;
 function rgba(css: string): RGBA {
   let c = colorCache.get(css);
   if (c) return c;
-  text.fillStyle = '#000';
-  text.fillStyle = css; // the 2D context normalizes any CSS color to #rrggbb or rgba(...)
-  const v = String(text.fillStyle);
-  if (v.startsWith('#')) {
-    c = [1, 3, 5].map((i) => parseInt(v.slice(i, i + 2), 16) / 255).concat(1) as RGBA;
-  } else {
-    const [r, g, b, a = 1] = v.slice(v.indexOf('(') + 1, -1).split(',').map(Number);
-    c = [r / 255, g / 255, b / 255, a];
-  }
+  // paint and read back: works for any CSS color space (oklch, color(), color-mix) without parsing
+  swatch ??= new OffscreenCanvas(1, 1).getContext('2d', { willReadFrequently: true })!;
+  swatch.clearRect(0, 0, 1, 1);
+  swatch.fillStyle = '#000';
+  swatch.fillStyle = css;
+  swatch.fillRect(0, 0, 1, 1);
+  const [r, g, b, a] = swatch.getImageData(0, 0, 1, 1).data;
+  c = [r / 255, g / 255, b / 255, a / 255];
   colorCache.set(css, c);
   return c;
 }
@@ -62,15 +62,31 @@ function schedule() {
 }
 
 function pushRect(i: number, x: number, y: number, w: number, h: number, c: RGBA, r: number) {
-  rects.set([x, y, w, h, c[0], c[1], c[2], c[3], r], i * RECT_STRIDE);
+  const o = i * RECT_STRIDE; // indexed writes: no per-rect array allocation
+  rects[o] = x;
+  rects[o + 1] = y;
+  rects[o + 2] = w;
+  rects[o + 3] = h;
+  rects[o + 4] = c[0];
+  rects[o + 5] = c[1];
+  rects[o + 6] = c[2];
+  rects[o + 7] = c[3];
+  rects[o + 8] = r;
 }
 
 function pushCurve(i: number, pts: number[], halfWidth: number): number {
   for (let p = 0; p + 3 < pts.length; p += 2) {
-    const [ax, ay, bx, by] = [pts[p], pts[p + 1], pts[p + 2], pts[p + 3]];
+    const ax = pts[p], ay = pts[p + 1], bx = pts[p + 2], by = pts[p + 3];
     const len = Math.hypot(bx - ax, by - ay) || 1;
     const nx = (-(by - ay) / len) * halfWidth, ny = ((bx - ax) / len) * halfWidth;
-    lines.set([ax + nx, ay + ny, ax - nx, ay - ny, bx + nx, by + ny, bx + nx, by + ny, ax - nx, ay - ny, bx - nx, by - ny], i * 2);
+    // two triangles (a+ a- b+, b+ a- b-), written in place
+    let o = i * 2;
+    lines[o++] = ax + nx; lines[o++] = ay + ny;
+    lines[o++] = ax - nx; lines[o++] = ay - ny;
+    lines[o++] = bx + nx; lines[o++] = by + ny;
+    lines[o++] = bx + nx; lines[o++] = by + ny;
+    lines[o++] = ax - nx; lines[o++] = ay - ny;
+    lines[o++] = bx - nx; lines[o] = by - ny;
     i += 6;
   }
   return i;
@@ -156,9 +172,12 @@ function drawText(visible: FlowNode[]) {
   }
 }
 
-function onPointer(kind: 'down' | 'move' | 'up', sx: number, sy: number) {
+function onPointer(kind: 'down' | 'move' | 'up' | 'cancel', sx: number, sy: number) {
   const w = toWorld(cam, sx, sy);
-  if (kind === 'down') {
+  if (kind === 'cancel') {
+    if (drag?.kind === 'link' && drag.detached) store.connect(drag.detached); // put the picked-up edge back
+    drag = null;
+  } else if (kind === 'down') {
     const hit = store.hit(w.x, w.y);
     const port = hit?.port;
     // grabbing a connected input picks up its edge (last one) so it can be reconnected or dropped
@@ -192,7 +211,9 @@ function onPointer(kind: 'down' | 'move' | 'up', sx: number, sy: number) {
   } else if (kind === 'up' && drag) {
     if (drag.kind === 'node') {
       selected = drag.node.id;
-      if (drag.moved) changed({ upsertNodes: [drag.node], removeNodes: [], upsertEdges: [], removeEdges: [] });
+      // drag.node is the snapshot from pointerdown; report where the node ended up
+      const moved = drag.moved && store.node(drag.node.id);
+      if (moved) changed({ upsertNodes: [moved], removeNodes: [], upsertEdges: [], removeEdges: [] });
       else send({ type: 'nodeClick', id: drag.node.id });
     } else if (drag.kind === 'link') {
       const hit = store.hit(w.x, w.y);
@@ -234,15 +255,15 @@ function reportSelection() {
 
 let lastStats = '';
 function reportStats() {
-  const key = `${store.nodes.size},${store.edges.size}`;
+  const key = `${store.nodeCount},${store.edgeCount}`;
   if (key === lastStats) return;
   lastStats = key;
-  send({ type: 'stats', nodes: store.nodes.size, edges: store.edges.size });
+  send({ type: 'stats', nodes: store.nodeCount, edges: store.edgeCount });
 }
 
 function changed(changes: GraphChanges) {
   if (selected && !store.node(selected)) selected = null;
-  if (!store.nodes.size) cam = { x: 0, y: 0, zoom: 1 };
+  if (!store.nodeCount) cam = { x: 0, y: 0, zoom: 1 };
   send({ type: 'changes', changes });
   schedule();
 }
@@ -252,7 +273,7 @@ function run(command: Command): unknown {
     case 'getNode':
       return store.node(command.id);
     case 'addAfter':
-      changed(store.addAfter(command.id));
+      changed(store.addAfter(command.id, command.node));
       return;
     case 'remove':
       changed(store.remove(command.id));
@@ -292,16 +313,27 @@ function toEdge(d: Extract<Drag, { kind: 'link' }>, other: FlowNode, otherPort: 
 
 addEventListener('message', (e: MessageEvent<ToWorker>) => {
   const m = e.data;
+  if (m.type !== 'init' && !renderer) {
+    // init failed (already reported): reject requests instead of leaving them pending
+    if ('reqId' in m) fail(m.reqId, new Error('ngx-node-flow: renderer not available'));
+    return;
+  }
   switch (m.type) {
     case 'init': {
       cfg = m.config;
       theme = m.theme;
       glCanvas = m.gl;
       const gl = m.gl.getContext('webgl2', { antialias: true, premultipliedAlpha: true });
-      if (!gl) throw new Error('ngx-node-flow: WebGL2 not available');
-      renderer = new GlRenderer(gl);
+      if (!gl) return send({ type: 'error', message: 'ngx-node-flow: WebGL2 not available' });
       store = new GraphStore(cfg);
       text = m.text.getContext('2d')!;
+      // GPU reset: the graph survives in the store; GL objects are rebuilt when the context returns
+      glCanvas.addEventListener('webglcontextlost', (ev) => ev.preventDefault());
+      glCanvas.addEventListener('webglcontextrestored', () => {
+        renderer = new GlRenderer(gl);
+        schedule();
+      });
+      renderer = new GlRenderer(gl);
       break;
     }
     case 'resize':
@@ -315,7 +347,7 @@ addEventListener('message', (e: MessageEvent<ToWorker>) => {
       store.reset(m.nodes, m.edges);
       drag = null; // dragged objects were replaced
       if (selected && !store.node(selected)) selected = null;
-      if (!store.nodes.size) cam = { x: 0, y: 0, zoom: 1 };
+      if (!store.nodeCount) cam = { x: 0, y: 0, zoom: 1 };
       break;
     case 'command':
       try {
@@ -333,8 +365,8 @@ addEventListener('message', (e: MessageEvent<ToWorker>) => {
       break;
     case 'pointer':
       return onPointer(m.kind, m.x, m.y);
-    case 'wheel':
-      cam = zoomAt(cam, m.x, m.y, Math.exp(-m.deltaY * 0.001), cfg.zoom.min, cfg.zoom.max);
+    case 'view':
+      cam = zoomAt({ ...cam, x: cam.x + m.panX, y: cam.y + m.panY }, m.x, m.y, m.zoom, cfg.zoom.min, cfg.zoom.max);
       break;
   }
   schedule();

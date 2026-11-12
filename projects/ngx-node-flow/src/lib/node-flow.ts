@@ -8,7 +8,7 @@ import {
   ElementRef,
   inject,
   Injector,
-  model,
+  input,
   output,
   signal,
   viewChild,
@@ -16,10 +16,9 @@ import {
 } from '@angular/core';
 import { NODE_FLOW_CONFIG } from './config';
 import { resolveTheme, themeStyles, watchTheme } from './theme';
-import { applyChanges } from './store';
 import { iterate, toReadableStream } from './stream';
 import { NodeFlowEditor } from './node-flow-editor';
-import { Command, FlowEdge, FlowNode, FromWorker, GraphChanges, GraphChunk, NodeFlowTheme, ToWorker } from './types';
+import { Command, FlowEdge, FlowNode, FromWorker, GraphChanges, GraphChunk, NewFlowNode, NodeFlowTheme, ToWorker } from './types';
 import { WORKER_SOURCE } from './worker-source';
 
 type Selection = Extract<FromWorker, { type: 'selection' }> & { id: string };
@@ -28,26 +27,26 @@ type Selection = Extract<FromWorker, { type: 'selection' }> & { id: string };
   selector: 'ngx-node-flow',
   imports: [NgTemplateOutlet],
   template: `
-    <canvas #gl></canvas><canvas #text></canvas>
+    <canvas #gl role="img" [attr.aria-label]="l.canvas"></canvas><canvas #text aria-hidden="true"></canvas>
     <span #probe hidden></span>
 
-    @if (selection(); as s) {
+    @if (!draft() && selection(); as s) {
       <div
         class="nf-overlay nf-menu"
-        role="toolbar"
-        aria-label="Ações da célula"
+        role="group"
+        [attr.aria-label]="l.nodeActions"
         [style.left.px]="s.x + s.w / 2"
         [style.top.px]="s.y"
         (pointerdown)="$event.stopPropagation()"
         (wheel)="$event.stopPropagation()"
       >
-        <button type="button" aria-label="Adicionar célula" title="Adicionar célula" (click)="add(s.id)">
+        <button type="button" [attr.aria-label]="l.addNode" [title]="l.addNode" (click)="add(s.id)">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
         </button>
-        <button type="button" aria-label="Editar célula" title="Editar célula" (click)="edit(s.id)">
+        <button type="button" [attr.aria-label]="l.editNode" [title]="l.editNode" (click)="edit(s.id)">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4" /></svg>
         </button>
-        <button type="button" aria-label="Remover célula" title="Remover célula" (click)="remove(s.id)">
+        <button type="button" [attr.aria-label]="l.removeNode" [title]="l.removeNode" (click)="remove(s.id)">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" /></svg>
         </button>
       </div>
@@ -61,7 +60,7 @@ type Selection = Extract<FromWorker, { type: 'selection' }> & { id: string };
         (click)="addFirst()"
       >
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
-        Adicionar primeira célula
+        {{ l.addFirstNode }}
       </button>
     }
 
@@ -70,25 +69,27 @@ type Selection = Extract<FromWorker, { type: 'selection' }> & { id: string };
         #sheet
         class="nf-overlay nf-sheet"
         role="dialog"
-        aria-labelledby="nf-sheet-title"
+        aria-modal="true"
+        [attr.aria-labelledby]="titleId"
         (pointerdown)="$event.stopPropagation()"
         (wheel)="$event.stopPropagation()"
         (keydown.escape)="discard()"
+        (keydown)="trapFocus($event)"
       >
-        <h2 id="nf-sheet-title">{{ isNew() ? 'Nova célula' : 'Editar célula' }}</h2>
+        <h2 [id]="titleId">{{ isNew() ? l.newNode : l.editNode }}</h2>
         <div class="nf-sheet-body">
           @if (editor(); as editor) {
             <ng-container *ngTemplateOutlet="editor.template; context: { $implicit: draft }" />
           } @else {
             <label class="nf-field">
-              Nome
+              {{ l.name }}
               <input [value]="draft().label" (input)="draft.update((n) => ({ ...n, label: $any($event.target).value }))" />
             </label>
           }
         </div>
         <footer>
-          <button type="button" (click)="discard()">Descartar</button>
-          <button type="button" class="nf-primary" [disabled]="!draft().label.trim()" (click)="save()">Salvar</button>
+          <button type="button" (click)="discard()">{{ l.discard }}</button>
+          <button type="button" class="nf-primary" [disabled]="!draft().label.trim()" (click)="save()">{{ l.save }}</button>
         </footer>
       </aside>
     }
@@ -121,21 +122,28 @@ type Selection = Extract<FromWorker, { type: 'selection' }> & { id: string };
     '(pointerdown)': 'pointer($event, "down")',
     '(pointermove)': 'pointer($event, "move")',
     '(pointerup)': 'pointer($event, "up")',
-    '(pointercancel)': 'pointer($event, "up")',
+    '(pointercancel)': 'pointer($event, "cancel")',
     '(wheel)': 'wheel($event)',
   },
 })
 export class NodeFlow {
   /**
-   * Declarative graph for small/medium sizes, kept in sync both ways.
-   * After load() the worker owns the graph and these models are no longer synced; use graphChange and stats.
+   * Initial graph. The worker owns the graph from then on: user edits are reported through
+   * graphChange (fold them with applyChanges if you keep arrays) and never written back here.
+   * Setting a new array replaces the whole graph, including anything added by load().
    */
-  readonly nodes = model<FlowNode[]>([]);
-  readonly edges = model<FlowEdge[]>([]);
+  readonly nodes = input<FlowNode[]>([]);
+  readonly edges = input<FlowEdge[]>([]);
+  /** Builds the node created by "add" and "add first node"; the library assigns id and position. */
+  readonly createNode = input<() => NewFlowNode>();
+  /** Called before a node is removed from the menu; return false (or resolve false) to keep it. */
+  readonly beforeRemove = input<(node: FlowNode) => boolean | Promise<boolean>>();
   readonly nodeClick = output<string>();
   readonly edgeCreated = output<FlowEdge>();
   /** Every change to the worker-owned graph (moves, edits, connections), for persistence. */
   readonly graphChange = output<GraphChanges>();
+  /** The renderer could not start (e.g. no WebGL2) or the worker crashed. */
+  readonly error = output<Error>();
 
   private readonly _stats = signal<{ nodes: number; edges: number; loading: boolean } | null>(null);
   /** Counts from the worker (null until the first frame) and whether a load() is running. */
@@ -146,9 +154,14 @@ export class NodeFlow {
   protected readonly draft = signal<WritableSignal<FlowNode> | null>(null);
   /** The draft is a node not yet in the graph (first-node flow). */
   protected readonly isNew = signal(false);
+  private static instances = 0;
+  protected readonly titleId = `nf-sheet-title-${NodeFlow.instances++}`;
+  /** Active pointers (CSS px), tracked to turn two touches into a pinch zoom. */
+  private readonly pointers = new Map<number, { x: number; y: number }>();
 
   private readonly config = inject(NODE_FLOW_CONFIG);
   protected readonly themeStyles = themeStyles(this.config.theme);
+  protected readonly l = this.config.labels;
   private readonly injector = inject(Injector);
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef).nativeElement;
   private readonly glCanvas = viewChild.required<ElementRef<HTMLCanvasElement>>('gl');
@@ -159,18 +172,14 @@ export class NodeFlow {
   private returnFocus: HTMLElement | null = null;
   private readonly pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private nextReq = 0;
-  private streamed = false;
   private loads = 0;
-  /** Last arrays written from worker changes, so the model effect does not echo them back. */
-  private echo: { nodes: FlowNode[]; edges: FlowEdge[] } | null = null;
 
   constructor() {
     const destroyRef = inject(DestroyRef);
 
     effect(() => {
       const worker = this.worker(), nodes = this.nodes(), edges = this.edges();
-      if (!worker || this.streamed || (this.echo?.nodes === nodes && this.echo.edges === edges)) return;
-      worker.postMessage({ type: 'data', nodes, edges } satisfies ToWorker);
+      worker?.postMessage({ type: 'data', nodes, edges } satisfies ToWorker);
     });
 
     // Browser-only (skipped on SSR): canvases must exist before transferring them.
@@ -179,7 +188,7 @@ export class NodeFlow {
       const worker = new Worker(url);
       URL.revokeObjectURL(url);
       worker.onmessage = (e: MessageEvent<FromWorker>) => this.onWorker(e.data);
-      worker.onerror = (e) => console.error('ngx-node-flow worker:', e.message);
+      worker.onerror = (e) => this.fail(`ngx-node-flow worker: ${e.message}`);
 
       const gl = this.glCanvas().nativeElement.transferControlToOffscreen();
       const text = this.textCanvas().nativeElement.transferControlToOffscreen();
@@ -214,7 +223,6 @@ export class NodeFlow {
    * The source is pulled lazily: the next chunk is only requested once the worker has room for it.
    */
   async load(source: AsyncIterable<GraphChunk> | ReadableStream<GraphChunk>, options: { signal?: AbortSignal } = {}): Promise<void> {
-    this.streamed = true;
     this.setLoading(+1);
     const stream = toReadableStream(source, options.signal);
     try {
@@ -267,8 +275,12 @@ export class NodeFlow {
     return this.call<T>({ type: 'command', command });
   }
 
+  private newNode(): NewFlowNode {
+    return this.createNode()?.() ?? { label: this.l.newNode, inputs: ['in'], outputs: ['out'] };
+  }
+
   protected add(id: string) {
-    void this.command({ op: 'addAfter', id });
+    void this.command({ op: 'addAfter', id, node: { ...this.newNode(), id: crypto.randomUUID(), x: 0, y: 0 } });
   }
 
   protected addFirst() {
@@ -277,12 +289,10 @@ export class NodeFlow {
     // the worker resets the camera on an empty graph, so screen center == world center
     this.openDraft(
       {
+        ...this.newNode(),
         id: crypto.randomUUID(),
         x: Math.round((width - node.width) / 2),
         y: Math.round((height - node.height) / 2),
-        label: '',
-        root: true,
-        outputs: ['out'],
       },
       true,
     );
@@ -305,7 +315,7 @@ export class NodeFlow {
 
   protected async remove(id: string) {
     const node = await this.command<FlowNode | undefined>({ op: 'getNode', id });
-    if (node?.root && !confirm('Remover a célula inicial apaga todo o fluxo. Continuar?')) return;
+    if (!node || (await this.beforeRemove()?.(node)) === false) return;
     await this.command({ op: 'remove', id });
     if (this.draft()?.().id === id) this.close();
   }
@@ -327,27 +337,70 @@ export class NodeFlow {
     this.returnFocus = null;
   }
 
-  protected pointer(e: PointerEvent, kind: 'down' | 'move' | 'up') {
-    if (kind === 'down') this.host.setPointerCapture(e.pointerId);
+  protected trapFocus(e: KeyboardEvent) {
+    if (e.key !== 'Tab') return;
+    const items = this.sheet()?.nativeElement.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    );
+    if (!items?.length) return;
+    const first = items[0], last = items[items.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
+
+  private post(msg: ToWorker) {
+    this.worker()?.postMessage(msg);
+  }
+
+  private fail(message: string) {
+    console.error(message);
+    this.error.emit(new Error(message));
+  }
+
+  protected pointer(e: PointerEvent, kind: 'down' | 'move' | 'up' | 'cancel') {
+    if (this.draft()) return; // the sheet is modal: editing must not race with drags
+    if (kind === 'down' && (e.button !== 0 || this.pointers.size >= 2)) return; // primary button; two touches max
     const r = this.host.getBoundingClientRect();
-    this.worker()?.postMessage({ type: 'pointer', kind, x: e.clientX - r.left, y: e.clientY - r.top } satisfies ToWorker);
+    const p = { x: e.clientX - r.left, y: e.clientY - r.top };
+    const prev = this.pointers.get(e.pointerId);
+    if (kind === 'down') {
+      this.host.setPointerCapture(e.pointerId);
+      this.pointers.set(e.pointerId, p);
+      // second touch: drop whatever the first one was dragging, the pinch takes over
+      if (this.pointers.size === 2) return this.post({ type: 'pointer', kind: 'cancel', ...p });
+    } else if (kind === 'move' && prev) {
+      this.pointers.set(e.pointerId, p);
+      if (this.pointers.size === 2) {
+        const [, o] = [...this.pointers].find(([id]) => id !== e.pointerId)!;
+        const zoom = Math.hypot(p.x - o.x, p.y - o.y) / (Math.hypot(prev.x - o.x, prev.y - o.y) || 1);
+        return this.post({ type: 'view', x: (p.x + o.x) / 2, y: (p.y + o.y) / 2, zoom, panX: (p.x - prev.x) / 2, panY: (p.y - prev.y) / 2 });
+      }
+    } else if (kind === 'up' || kind === 'cancel') {
+      const pinching = this.pointers.size === 2;
+      this.pointers.delete(e.pointerId);
+      if (pinching) return; // the drag was already cancelled when the pinch began
+    }
+    this.post({ type: 'pointer', kind, ...p });
   }
 
   protected wheel(e: WheelEvent) {
     e.preventDefault();
+    if (this.draft()) return;
+    // Firefox reports lines/pages; normalize to px. deltaY zooms (ctrl+wheel = trackpad pinch), deltaX pans.
+    const unit = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : e.deltaMode === WheelEvent.DOM_DELTA_PAGE ? this.host.clientHeight : 1;
     const r = this.host.getBoundingClientRect();
-    this.worker()?.postMessage({ type: 'wheel', x: e.clientX - r.left, y: e.clientY - r.top, deltaY: e.deltaY } satisfies ToWorker);
+    this.post({ type: 'view', x: e.clientX - r.left, y: e.clientY - r.top, zoom: Math.exp(-e.deltaY * unit * 0.001), panX: -e.deltaX * unit, panY: 0 });
   }
 
   private onWorker(m: FromWorker) {
     switch (m.type) {
       case 'changes':
         this.graphChange.emit(m.changes);
-        if (!this.streamed) {
-          this.echo = applyChanges(this.nodes(), this.edges(), m.changes);
-          this.nodes.set(this.echo.nodes);
-          this.edges.set(this.echo.edges);
-        }
         break;
       case 'stats':
         this._stats.set({ nodes: m.nodes, edges: m.edges, loading: this.loads > 0 });
@@ -359,6 +412,9 @@ export class NodeFlow {
         else p?.resolve(m.value);
         break;
       }
+      case 'error':
+        this.fail(m.message);
+        break;
       case 'nodeClick':
         this.nodeClick.emit(m.id);
         break;

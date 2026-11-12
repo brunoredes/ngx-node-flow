@@ -3,130 +3,247 @@ import { FlowEdge, FlowNode, GraphChanges, GraphChunk, NodeFlowConfig } from './
 
 const CELL = 1024;
 const GAP = 80;
+const OFFSET = 2 ** 20; // grid coords shifted positive so (cx, cy) packs into one safe integer key
 
 export const noChanges = (): GraphChanges => ({ upsertNodes: [], removeNodes: [], upsertEdges: [], removeEdges: [] });
 
-const sameEdge = (a: FlowEdge, b: FlowEdge) =>
-  a.source === b.source && a.sourcePort === b.sourcePort && a.target === b.target && a.targetPort === b.targetPort;
+type Ports = Pick<FlowNode, 'inputs' | 'outputs'>;
+type Extra = Omit<FlowNode, 'id' | 'x' | 'y' | 'label' | 'inputs' | 'outputs'>;
+
+function grow<T extends Float64Array | Uint32Array | Uint8Array>(a: T, size: number): T {
+  if (size <= a.length) return a;
+  const b = new (a.constructor as new (n: number) => T)(Math.max(size, a.length * 2));
+  b.set(a);
+  return b;
+}
 
 /**
- * Worker-side graph: Maps for O(1) lookups, adjacency for O(degree) edge work and a uniform
- * spatial grid so rendering and hit-testing only touch what is near the viewport.
- * shortcut: one JS object per node (~300-400 MB at 1M); move to typed-array columns if memory becomes the limit.
+ * Worker-side graph stored column-wise: positions and references live in typed arrays indexed by
+ * slot, port lists and port names are interned, and objects are only built for what is queried.
+ * Edges may reference nodes that have not arrived yet: those get a placeholder slot (alive = 0).
  */
 export class GraphStore {
-  readonly nodes = new Map<string, FlowNode>();
-  readonly edges = new Map<string, FlowEdge>();
-  private readonly adj = new Map<string, Set<string>>();
-  private readonly grid = new Map<string, Set<FlowNode>>();
-  private readonly z = new Map<string, number>();
+  // nodes
+  private nId: string[] = [];
+  private nIdx = new Map<string, number>();
+  private nLabel: string[] = [];
+  private nx = new Float64Array(1024);
+  private ny = new Float64Array(1024);
+  private nPorts = new Uint32Array(1024);
+  private nAlive = new Uint8Array(1024);
+  private nSeen = new Uint32Array(1024);
+  private nExtra = new Map<number, Extra>();
+  private adj: (number[] | undefined)[] = [];
+  private nFree: number[] = [];
+  private liveNodes = 0;
+  private stamp = 0;
+  // interned port lists ({inputs, outputs} combos) and port names
+  private ports: Ports[] = [];
+  private portsIdx = new Map<string, number>();
+  private strs: string[] = [];
+  private strIdx = new Map<string, number>();
+  // edges
+  private eId: string[] = [];
+  private eIdx = new Map<string, number>();
+  private eSrc = new Uint32Array(1024);
+  private eDst = new Uint32Array(1024);
+  private eSp = new Uint32Array(1024);
+  private eTp = new Uint32Array(1024);
+  private eFree: number[] = [];
+  private liveEdges = 0;
+  // spatial grid: cell key -> node slots; z only for nodes brought to front
+  private grid = new Map<number, number[]>();
+  private z = new Map<number, number>();
   private zTop = 0;
 
   constructor(private readonly cfg: NodeFlowConfig) {}
 
-  // --- indexing -----------------------------------------------------------
-
-  private cells(n: FlowNode, fn: (key: string) => void) {
-    const x0 = Math.floor(n.x / CELL), x1 = Math.floor((n.x + this.cfg.node.width) / CELL);
-    const y0 = Math.floor(n.y / CELL), y1 = Math.floor((n.y + nodeHeight(n, this.cfg)) / CELL);
-    for (let cx = x0; cx <= x1; cx++) for (let cy = y0; cy <= y1; cy++) fn(`${cx},${cy}`);
+  get nodeCount() {
+    return this.liveNodes;
   }
 
-  private index(n: FlowNode) {
-    this.cells(n, (k) => {
-      let cell = this.grid.get(k);
-      if (!cell) this.grid.set(k, (cell = new Set()));
-      cell.add(n);
-    });
+  get edgeCount() {
+    return this.liveEdges;
   }
 
-  private unindex(n: FlowNode) {
-    this.cells(n, (k) => {
+  // --- interning --------------------------------------------------------------
+
+  private str(s: string): number {
+    let i = this.strIdx.get(s);
+    if (i === undefined) this.strIdx.set(s, (i = this.strs.push(s) - 1));
+    return i;
+  }
+
+  private portsOf(n: Ports): number {
+    const key = (n.inputs ?? []).join('\0') + '\u0001' + (n.outputs ?? []).join('\0');
+    let i = this.portsIdx.get(key);
+    if (i === undefined) this.portsIdx.set(key, (i = this.ports.push({ inputs: n.inputs && [...n.inputs], outputs: n.outputs && [...n.outputs] }) - 1));
+    return i;
+  }
+
+  // --- slots ------------------------------------------------------------------
+
+  private slot(id: string): number {
+    let s = this.nIdx.get(id);
+    if (s !== undefined) return s;
+    s = this.nFree.pop() ?? this.nId.length;
+    const size = s + 1;
+    this.nx = grow(this.nx, size);
+    this.ny = grow(this.ny, size);
+    this.nPorts = grow(this.nPorts, size);
+    this.nAlive = grow(this.nAlive, size);
+    this.nSeen = grow(this.nSeen, size);
+    this.nId[s] = id;
+    this.nAlive[s] = 0;
+    this.adj[s] = undefined;
+    this.nIdx.set(id, s);
+    return s;
+  }
+
+  private cells(s: number, fn: (key: number) => void) {
+    const x = this.nx[s], y = this.ny[s];
+    const x0 = Math.floor(x / CELL), x1 = Math.floor((x + this.cfg.node.width) / CELL);
+    const y0 = Math.floor(y / CELL), y1 = Math.floor((y + nodeHeight(this.ports[this.nPorts[s]], this.cfg)) / CELL);
+    for (let cx = x0; cx <= x1; cx++) for (let cy = y0; cy <= y1; cy++) fn((cx + OFFSET) * 2 ** 21 + (cy + OFFSET));
+  }
+
+  private index(s: number) {
+    this.cells(s, (k) => {
       const cell = this.grid.get(k);
-      cell?.delete(n);
-      if (cell?.size === 0) this.grid.delete(k);
+      if (cell) cell.push(s);
+      else this.grid.set(k, [s]);
     });
   }
 
-  private setNode(n: FlowNode) {
-    const old = this.nodes.get(n.id);
-    if (old) this.unindex(old);
-    this.nodes.set(n.id, n);
-    this.index(n);
+  private unindex(s: number) {
+    this.cells(s, (k) => {
+      const cell = this.grid.get(k);
+      if (!cell) return;
+      const i = cell.indexOf(s);
+      if (i >= 0) cell.splice(i, 1);
+      if (!cell.length) this.grid.delete(k);
+    });
+  }
+
+  private setNode(n: FlowNode): number {
+    const s = this.slot(n.id);
+    if (this.nAlive[s]) this.unindex(s);
+    else this.liveNodes++;
+    this.nAlive[s] = 1;
+    this.nx[s] = n.x;
+    this.ny[s] = n.y;
+    this.nLabel[s] = n.label;
+    this.nPorts[s] = this.portsOf(n);
+    const { id, x, y, label, inputs, outputs, ...extra } = n;
+    if (Object.keys(extra).length) this.nExtra.set(s, extra);
+    else this.nExtra.delete(s);
+    this.index(s);
+    return s;
+  }
+
+  private mat(s: number): FlowNode {
+    const p = this.ports[this.nPorts[s]];
+    const n: FlowNode = { id: this.nId[s], x: this.nx[s], y: this.ny[s], label: this.nLabel[s] };
+    if (p.inputs) n.inputs = p.inputs;
+    if (p.outputs) n.outputs = p.outputs;
+    const extra = this.nExtra.get(s);
+    return extra ? Object.assign(n, extra) : n;
   }
 
   private setEdge(e: FlowEdge) {
-    this.edges.set(e.id, e);
-    for (const id of [e.source, e.target]) {
-      let set = this.adj.get(id);
-      if (!set) this.adj.set(id, (set = new Set()));
-      set.add(e.id);
+    let s = this.eIdx.get(e.id);
+    if (s !== undefined) this.deleteEdgeSlot(s);
+    s = this.eFree.pop() ?? this.eId.length;
+    const size = s + 1;
+    this.eSrc = grow(this.eSrc, size);
+    this.eDst = grow(this.eDst, size);
+    this.eSp = grow(this.eSp, size);
+    this.eTp = grow(this.eTp, size);
+    const src = this.slot(e.source), dst = this.slot(e.target);
+    this.eId[s] = e.id;
+    this.eSrc[s] = src;
+    this.eDst[s] = dst;
+    this.eSp[s] = this.str(e.sourcePort);
+    this.eTp[s] = this.str(e.targetPort);
+    this.eIdx.set(e.id, s);
+    (this.adj[src] ??= []).push(s);
+    if (dst !== src) (this.adj[dst] ??= []).push(s);
+    this.liveEdges++;
+  }
+
+  private matEdge(s: number): FlowEdge {
+    return { id: this.eId[s], source: this.nId[this.eSrc[s]], sourcePort: this.strs[this.eSp[s]], target: this.nId[this.eDst[s]], targetPort: this.strs[this.eTp[s]] };
+  }
+
+  private deleteEdgeSlot(s: number) {
+    for (const n of [this.eSrc[s], this.eDst[s]]) {
+      const list = this.adj[n];
+      const i = list?.indexOf(s) ?? -1;
+      if (i >= 0) list!.splice(i, 1);
     }
+    this.eIdx.delete(this.eId[s]);
+    this.eFree.push(s);
+    this.liveEdges--;
   }
 
-  private deleteEdge(id: string): boolean {
-    const e = this.edges.get(id);
-    if (!e) return false;
-    this.edges.delete(id);
-    this.adj.get(e.source)?.delete(id);
-    this.adj.get(e.target)?.delete(id);
-    return true;
-  }
-
-  // --- ingestion ------------------------------------------------------------
+  // --- ingestion ----------------------------------------------------------------
 
   reset(nodes: FlowNode[], edges: FlowEdge[]) {
-    this.nodes.clear();
-    this.edges.clear();
-    this.adj.clear();
-    this.grid.clear();
-    this.z.clear();
+    Object.assign(this, new GraphStore(this.cfg)); // fresh columns, same instance
     this.addChunk({ nodes, edges });
   }
 
-  /** Edges may point at nodes that have not arrived yet; they render once both ends exist. */
   addChunk(chunk: GraphChunk) {
     chunk.nodes?.forEach((n) => this.setNode(n));
     chunk.edges?.forEach((e) => this.setEdge(e));
   }
 
-  // --- queries --------------------------------------------------------------
+  // --- queries --------------------------------------------------------------------
 
-  node(id: string) {
-    return this.nodes.get(id);
+  node(id: string): FlowNode | undefined {
+    const s = this.nIdx.get(id);
+    return s !== undefined && this.nAlive[s] ? this.mat(s) : undefined;
   }
 
   /** Nodes intersecting the world rect, bottom-most first (draw order). */
   query(x0: number, y0: number, x1: number, y1: number): FlowNode[] {
-    const out = new Set<FlowNode>();
+    const stamp = ++this.stamp;
     const w = this.cfg.node.width;
+    const hits: number[] = [];
     for (let cx = Math.floor(x0 / CELL); cx <= Math.floor(x1 / CELL); cx++) {
       for (let cy = Math.floor(y0 / CELL); cy <= Math.floor(y1 / CELL); cy++) {
-        this.grid.get(`${cx},${cy}`)?.forEach((n) => {
-          if (n.x <= x1 && n.y <= y1 && n.x + w >= x0 && n.y + nodeHeight(n, this.cfg) >= y0) out.add(n);
-        });
+        const cell = this.grid.get((cx + OFFSET) * 2 ** 21 + (cy + OFFSET));
+        if (!cell) continue;
+        for (const s of cell) {
+          if (this.nSeen[s] === stamp) continue;
+          this.nSeen[s] = stamp;
+          const x = this.nx[s], y = this.ny[s];
+          if (x <= x1 && y <= y1 && x + w >= x0 && y + nodeHeight(this.ports[this.nPorts[s]], this.cfg) >= y0) hits.push(s);
+        }
       }
     }
-    const list = [...out];
-    if (this.z.size) list.sort((a, b) => (this.z.get(a.id) ?? 0) - (this.z.get(b.id) ?? 0));
-    return list;
+    if (this.z.size) hits.sort((a, b) => (this.z.get(a) ?? 0) - (this.z.get(b) ?? 0));
+    return hits.map((s) => this.mat(s));
   }
 
   /** Edges touching any of `nodes`, each once. */
   edgesOf(nodes: Iterable<FlowNode>): FlowEdge[] {
-    const ids = new Set<string>();
-    for (const n of nodes) this.adj.get(n.id)?.forEach((id) => ids.add(id));
-    return [...ids].map((id) => this.edges.get(id)!);
+    const seen = new Set<number>();
+    for (const n of nodes) {
+      const s = this.nIdx.get(n.id);
+      if (s !== undefined) this.adj[s]?.forEach((e) => seen.add(e));
+    }
+    return [...seen].map((e) => this.matEdge(e));
   }
 
   /** Last edge plugged into an input port (the one a drag picks up). */
   edgeInto(nodeId: string, port: string): FlowEdge | undefined {
-    let found: FlowEdge | undefined;
-    this.adj.get(nodeId)?.forEach((id) => {
-      const e = this.edges.get(id)!;
-      if (e.target === nodeId && e.targetPort === port) found = e;
-    });
-    return found;
+    const s = this.nIdx.get(nodeId);
+    const p = this.strIdx.get(port);
+    if (s === undefined || p === undefined) return undefined;
+    const list = this.adj[s] ?? [];
+    for (let i = list.length - 1; i >= 0; i--) if (this.eDst[list[i]] === s && this.eTp[list[i]] === p) return this.matEdge(list[i]);
+    return undefined;
   }
 
   hit(wx: number, wy: number): Hit | null {
@@ -134,92 +251,114 @@ export class GraphStore {
     return hitTest(this.query(wx - r, wy - r, wx + r, wy + r), wx, wy, this.cfg);
   }
 
-  // --- mutations (each returns what changed) --------------------------------
+  // --- mutations (each returns what changed) ------------------------------------------
 
   bringToFront(id: string) {
-    this.z.set(id, ++this.zTop);
+    const s = this.nIdx.get(id);
+    if (s !== undefined) this.z.set(s, ++this.zTop);
   }
 
   move(id: string, x: number, y: number): GraphChanges {
-    const n = this.nodes.get(id);
-    if (!n) return noChanges();
-    this.unindex(n);
-    n.x = x;
-    n.y = y;
-    this.index(n);
-    return { ...noChanges(), upsertNodes: [n] };
+    const s = this.nIdx.get(id);
+    if (s === undefined || !this.nAlive[s]) return noChanges();
+    this.unindex(s);
+    this.nx[s] = x;
+    this.ny[s] = y;
+    this.index(s);
+    return { ...noChanges(), upsertNodes: [this.mat(s)] };
   }
 
   connect(edge: FlowEdge): GraphChanges | null {
-    for (const id of this.adj.get(edge.source) ?? []) if (sameEdge(this.edges.get(id)!, edge)) return null;
+    const src = this.nIdx.get(edge.source), dst = this.nIdx.get(edge.target);
+    const sp = this.strIdx.get(edge.sourcePort), tp = this.strIdx.get(edge.targetPort);
+    const dup = src !== undefined && this.adj[src]?.some((e) => this.eSrc[e] === src && this.eDst[e] === dst && this.eSp[e] === sp && this.eTp[e] === tp);
+    if (dup) return null;
     this.setEdge(edge);
     return { ...noChanges(), upsertEdges: [edge] };
   }
 
   disconnect(id: string): GraphChanges {
-    return this.deleteEdge(id) ? { ...noChanges(), removeEdges: [id] } : noChanges();
+    const s = this.eIdx.get(id);
+    if (s === undefined) return noChanges();
+    this.deleteEdgeSlot(s);
+    return { ...noChanges(), removeEdges: [id] };
   }
 
-  /** Adds a node to the right of `id`, connected from its first free output (or first output). */
-  addAfter(id: string): GraphChanges & { node?: FlowNode } {
-    const from = this.nodes.get(id);
+  /**
+   * Places `template` to the right of `id` (its x/y are ignored), connected from the source's first free
+   * output (or first output) into the new node's first input.
+   */
+  addAfter(id: string, template: FlowNode): GraphChanges & { node?: FlowNode } {
+    const from = this.node(id);
     if (!from) return noChanges();
     const w = this.cfg.node.width;
-    const node: FlowNode = { id: crypto.randomUUID(), x: from.x + w + GAP, y: from.y, label: 'Nova célula', inputs: ['in'], outputs: ['out'] };
+    const node: FlowNode = { ...template, x: from.x + w + GAP, y: from.y };
     const h = nodeHeight(node, this.cfg);
-    while (this.query(node.x, node.y, node.x + w, node.y + h).length) node.y += h + 20;
+    // jump below everything overlapping the slot instead of probing one step at a time
+    for (let hits = this.query(node.x, node.y, node.x + w, node.y + h); hits.length; hits = this.query(node.x, node.y, node.x + w, node.y + h)) {
+      node.y = Math.max(...hits.map((n) => n.y + nodeHeight(n, this.cfg))) + 20;
+    }
     this.setNode(node);
 
     const changes: GraphChanges & { node?: FlowNode } = { ...noChanges(), upsertNodes: [node], node };
+    const s = this.nIdx.get(from.id)!;
+    const used = new Set((this.adj[s] ?? []).filter((e) => this.eSrc[e] === s).map((e) => this.strs[this.eSp[e]]));
     const outs = from.outputs ?? [];
-    const used = new Set([...(this.adj.get(from.id) ?? [])].map((e) => this.edges.get(e)!).filter((e) => e.source === from.id).map((e) => e.sourcePort));
     const port = outs.find((p) => !used.has(p)) ?? outs[0];
-    if (port) {
-      const edge = { id: `${from.id}:${port}->${node.id}:in`, source: from.id, sourcePort: port, target: node.id, targetPort: 'in' };
+    const input = node.inputs?.[0];
+    if (port && input) {
+      const edge = { id: `${from.id}:${port}->${node.id}:${input}`, source: from.id, sourcePort: port, target: node.id, targetPort: input };
       this.setEdge(edge);
       changes.upsertEdges.push(edge);
     }
     return changes;
   }
 
-  /** Removing the root clears everything; otherwise downstream nodes are left disconnected. */
+  /** Removes the node and its edges; neighbours are left disconnected. */
   remove(id: string): GraphChanges {
-    const n = this.nodes.get(id);
-    if (!n) return noChanges();
-    if (n.root) {
-      this.reset([], []);
-      return { ...noChanges(), clear: true };
-    }
-    const removeEdges = [...(this.adj.get(id) ?? [])];
-    removeEdges.forEach((e) => this.deleteEdge(e));
-    this.adj.delete(id);
-    this.unindex(n);
-    this.nodes.delete(id);
-    this.z.delete(id);
+    const s = this.nIdx.get(id);
+    if (s === undefined || !this.nAlive[s]) return noChanges();
+    const removeEdges = [...(this.adj[s] ?? [])].map((e) => {
+      const edgeId = this.eId[e];
+      this.deleteEdgeSlot(e);
+      return edgeId;
+    });
+    this.unindex(s);
+    this.nAlive[s] = 0;
+    this.nIdx.delete(id);
+    this.nExtra.delete(s);
+    this.z.delete(s);
+    this.adj[s] = undefined;
+    this.nFree.push(s);
+    this.liveNodes--;
     return { ...noChanges(), removeNodes: [id], removeEdges };
   }
 
   /** Inserts or replaces a node, dropping its edges whose ports no longer exist. */
   upsertNode(node: FlowNode): GraphChanges {
-    this.setNode(node);
-    const removeEdges = [...(this.adj.get(node.id) ?? [])].filter((id) => {
-      const e = this.edges.get(id)!;
-      return (e.source === node.id && !node.outputs?.includes(e.sourcePort)) || (e.target === node.id && !node.inputs?.includes(e.targetPort));
-    });
-    removeEdges.forEach((e) => this.deleteEdge(e));
+    const s = this.setNode(node);
+    const removeEdges: string[] = [];
+    for (const e of [...(this.adj[s] ?? [])]) {
+      const gone =
+        (this.eSrc[e] === s && !node.outputs?.includes(this.strs[this.eSp[e]])) ||
+        (this.eDst[e] === s && !node.inputs?.includes(this.strs[this.eTp[e]]));
+      if (gone) {
+        removeEdges.push(this.eId[e]);
+        this.deleteEdgeSlot(e);
+      }
+    }
     return { ...noChanges(), upsertNodes: [node], removeEdges };
   }
 }
 
-/** Mirrors worker changes onto plain arrays (used to keep small-graph models in sync). */
+/** Folds a graphChange event into plain arrays, for apps that persist the graph as arrays. */
 export function applyChanges(nodes: FlowNode[], edges: FlowEdge[], ch: GraphChanges): { nodes: FlowNode[]; edges: FlowEdge[] } {
   const upsert = <T extends { id: string }>(list: T[], remove: string[], items: T[]) => {
     const gone = new Set([...remove, ...items.map((i) => i.id)]);
     return [...list.filter((i) => !gone.has(i.id)), ...items];
   };
-  const [n, e] = ch.clear ? [[], []] : [nodes, edges];
   return {
-    nodes: upsert(n, ch.removeNodes, ch.upsertNodes),
-    edges: upsert(e, ch.removeEdges, ch.upsertEdges),
+    nodes: upsert(nodes, ch.removeNodes, ch.upsertNodes),
+    edges: upsert(edges, ch.removeEdges, ch.upsertEdges),
   };
 }
