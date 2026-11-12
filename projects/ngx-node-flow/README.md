@@ -85,6 +85,8 @@ Selection and keyboard: click selects; Shift/Ctrl/Cmd+click toggles; Shift+drag 
 | Ctrl+A, Ctrl+C, Ctrl+V, Ctrl+D | select all, copy, paste, duplicate |
 | Escape | clear the selection, cancel connect mode |
 
+The edit sheet is a modal dialog (opened from buttons with `aria-haspopup="dialog"`). Its Save and Discard buttons are described as closing the dialog; when it closes, the live region says what happened and that the dialog closed, and keyboard focus returns to the node that was edited, which is read right after.
+
 Tab leaves the canvas (into the node menu, then out), so it is never a keyboard trap. Copy writes JSON to the clipboard, and paste only accepts that format, validated before it reaches the graph.
 
 Build with `npm run build:lib` (it bundles the worker first). Pages with a CSP need `worker-src blob:`.

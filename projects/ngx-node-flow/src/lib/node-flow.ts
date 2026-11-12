@@ -75,7 +75,7 @@ type Selection = Extract<FromWorker, { type: 'selection' }> & { id: string };
         <button type="button" [attr.aria-label]="l.addNode" [title]="l.addNode" (click)="add(s.id)">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
         </button>
-        <button type="button" [attr.aria-label]="l.editNode" [title]="l.editNode" (click)="edit(s.id)">
+        <button type="button" [attr.aria-label]="l.editNode" [title]="l.editNode" (click)="edit(s.id)" aria-haspopup="dialog">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4" /></svg>
         </button>
         @if (!s.locked) {
@@ -90,6 +90,7 @@ type Selection = Extract<FromWorker, { type: 'selection' }> & { id: string };
       <button
         type="button"
         class="nf-overlay nf-empty"
+        aria-haspopup="dialog"
         (pointerdown)="$event.stopPropagation()"
         (click)="addFirst()"
       >
@@ -122,8 +123,9 @@ type Selection = Extract<FromWorker, { type: 'selection' }> & { id: string };
           }
         </div>
         <footer>
-          <button type="button" (click)="discard()">{{ l.discard }}</button>
-          <button type="button" class="nf-primary" [disabled]="!draft().label.trim()" (click)="save()">{{ l.save }}</button>
+          <span class="nf-sr" [id]="closeHintId">{{ l.closesDialog }}</span>
+          <button type="button" [attr.aria-describedby]="closeHintId" (click)="discard()">{{ l.discard }}</button>
+          <button type="button" class="nf-primary" [attr.aria-describedby]="closeHintId" [disabled]="!draft().label.trim()" (click)="save()">{{ l.save }}</button>
         </footer>
       </aside>
     }
@@ -228,6 +230,7 @@ export class NodeFlow {
   private readonly uid = NodeFlow.instances++;
   protected readonly titleId = `nf-sheet-title-${this.uid}`;
   protected readonly helpId = `nf-help-${this.uid}`;
+  protected readonly closeHintId = `nf-close-hint-${this.uid}`;
   /** Live region text: the keyboard-focused node, or the result of a keyboard action. */
   protected readonly announcement = signal('');
   private announceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -253,7 +256,6 @@ export class NodeFlow {
   private readonly sheet = viewChild<ElementRef<HTMLElement>>('sheet');
   private readonly probe = viewChild.required<ElementRef<HTMLElement>>('probe');
   private readonly worker = signal<Worker | undefined>(undefined);
-  private returnFocus: HTMLElement | null = null;
   private readonly pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private nextReq = 0;
   private loads = 0;
@@ -477,7 +479,6 @@ export class NodeFlow {
   }
 
   private openDraft(node: FlowNode, isNew: boolean) {
-    this.returnFocus = document.activeElement as HTMLElement | null;
     this.isNew.set(isNew);
     this.draft.set(signal(node));
     afterNextRender(
@@ -497,17 +498,28 @@ export class NodeFlow {
     const draft = this.draft()?.();
     if (!draft) return;
     void this.command({ op: 'upsertNode', node: draft });
-    this.close();
+    this.close(this.l.changesSaved);
   }
 
   protected discard() {
-    this.close();
+    this.close(this.l.changesDiscarded);
   }
 
-  private close() {
+  /**
+   * Closes the sheet and puts keyboard focus back on the node it edited (the menu button that opened it
+   * is gone by now). With an outcome, announces "<outcome> Dialog closed. <node>" in one go.
+   */
+  private close(outcome?: string) {
+    const id = this.draft()?.().id;
     this.draft.set(null);
-    this.returnFocus?.focus();
-    this.returnFocus = null;
+    this.host.focus();
+    if (!id) return;
+    // after upsertNode (same worker queue), so a saved new node is already there; a discarded new one is not
+    void this.command<FocusReport | null>({ op: 'focusNode', id }).then((m) => {
+      if (!outcome) return;
+      const closed = `${outcome} ${this.l.dialogClosed}`;
+      this.announce(m?.id ? `${closed} ${this.describe(m)}` : closed);
+    });
   }
 
   protected trapFocus(e: KeyboardEvent) {
@@ -628,16 +640,18 @@ export class NodeFlow {
         break;
       case 'focus':
         this.focusedId = m.id;
-        if (m.id) {
-          const status = { idle: '', running: this.l.statusRunning, success: this.l.statusSuccess, error: this.l.statusError }[m.status];
-          const parts = [this.connectFrom ? `${this.l.connectTo} ${m.label}` : m.label, m.selected && this.l.selected, status, ...m.errors];
-          const kids = m.children === 0 ? this.l.noChildren : `${m.children} ${m.children === 1 ? this.l.child : this.l.children}`;
-          parts.push(kids);
-          // arrow keys held or tapped fast: only the node where navigation stops is read
-          this.announce(parts.filter(Boolean).join(', '), NAV_DEBOUNCE_MS);
-        }
+        // arrow keys held or tapped fast: only the node where navigation stops is read
+        if (m.id) this.announce(this.describe(m), NAV_DEBOUNCE_MS);
         break;
     }
+  }
+
+  /** "Name, selected, running, <errors>, 2 children" */
+  private describe(m: FocusReport): string {
+    const status = { idle: '', running: this.l.statusRunning, success: this.l.statusSuccess, error: this.l.statusError }[m.status];
+    const kids = m.children === 0 ? this.l.noChildren : `${m.children} ${m.children === 1 ? this.l.child : this.l.children}`;
+    const parts = [this.connectFrom ? `${this.l.connectTo} ${m.label}` : m.label, m.selected && this.l.selected, status, ...m.errors, kids];
+    return parts.filter(Boolean).join(', ');
   }
 
   // --- keyboard ------------------------------------------------------------------
@@ -762,6 +776,7 @@ export class NodeFlow {
 }
 
 type Direction = 'left' | 'right' | 'up' | 'down';
+type FocusReport = Extract<FromWorker, { type: 'focus' }>;
 /** Quiet time after the last arrow key before the focused node is read. */
 const NAV_DEBOUNCE_MS = 300;
 

@@ -824,10 +824,14 @@ function reportSelection() {
 }
 
 let lastFocus = '';
-function reportFocus() {
+function focusMsg(): Extract<FromWorker, { type: 'focus' }> {
   const n = focusVisible && focused ? store.node(focused) : undefined;
   const st = n && statuses.get(n.id);
-  const msg: FromWorker = { type: 'focus', id: n?.id ?? null, label: n?.label ?? '', selected: !!n && selNodes.has(n.id), status: st?.status ?? 'idle', errors: st?.errors ?? [], children: n ? store.childCount(n.id) : 0 };
+  return { type: 'focus', id: n?.id ?? null, label: n?.label ?? '', selected: !!n && selNodes.has(n.id), status: st?.status ?? 'idle', errors: st?.errors ?? [], children: n ? store.childCount(n.id) : 0 };
+}
+
+function reportFocus() {
+  const msg = focusMsg();
   const key = JSON.stringify(msg);
   if (key !== lastFocus) {
     lastFocus = key;
@@ -930,6 +934,20 @@ function run(command: Command): unknown {
       return schedule();
     case 'focusNext':
       return focusNext(command.dir, command.keep);
+    case 'focusNode': {
+      // e.g. back on the node after its edit dialog closes; replies what reportFocus would send, so the
+      // caller can read it in one announcement (and the frame does not send it again)
+      const n = store.node(command.id);
+      if (!n || store.hidden(n.id)) return null;
+      focused = n.id;
+      focusVisible = true;
+      selectOnly([n.id]);
+      reveal(n);
+      schedule();
+      const msg = focusMsg();
+      lastFocus = JSON.stringify(msg);
+      return msg;
+    }
     case 'toggleFocused':
       if (focused) toggleIn(selNodes, focused);
       return schedule();

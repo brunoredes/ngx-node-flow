@@ -141,6 +141,12 @@ export interface NodeFlowLabels {
   /** Announced after a group's name when it is collapsed / expanded. */
   groupCollapsed: string;
   groupExpanded: string;
+  /** Description of the sheet's Save and Discard buttons: they close the dialog. */
+  closesDialog: string;
+  /** Announced when the edit sheet closes, before the focused node: "{changesSaved} {dialogClosed} Node…". */
+  dialogClosed: string;
+  changesSaved: string;
+  changesDiscarded: string;
   /** Arrow key with nothing that way: "{noNode} {dirRight}. {canGo} {dirDown}, {dirLeft}." */
   noNode: string;
   canGo: string;
@@ -197,6 +203,8 @@ export type Command =
   /** Moves keyboard focus to the nearest node in a direction; keep: leave the selection alone. Replies the focused id. */
   | { op: 'focusNext'; dir: 'left' | 'right' | 'up' | 'down'; keep: boolean }
   | { op: 'toggleFocused' }
+  /** Gives keyboard focus (ring + selection) to a node; replies its focus report, or null if it is not there. */
+  | { op: 'focusNode'; id: string }
   | { op: 'moveSelection'; dx: number; dy: number }
   | { op: 'removeMany'; nodes: string[]; edges: string[] }
   | { op: 'copy' }
