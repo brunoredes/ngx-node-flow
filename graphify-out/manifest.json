@@ -1,0 +1,374 @@
+{
+  ".vscode/extensions.json": {
+    "mtime": 1794425250.20221,
+    "seen": 1794479941.6801755,
+    "ast_hash": "d3b118b41884c371c18cbd55e392eb07",
+    "semantic_hash": ""
+  },
+  ".vscode/launch.json": {
+    "mtime": 1794425250.2029464,
+    "seen": 1794479941.680181,
+    "ast_hash": "c6799d2f7ae6f5d7a740d1023654bb8d",
+    "semantic_hash": ""
+  },
+  ".vscode/tasks.json": {
+    "mtime": 1794425250.2030246,
+    "seen": 1794479941.6801834,
+    "ast_hash": "903821282d5c5b46a4673a263eeb9dee",
+    "semantic_hash": ""
+  },
+  "angular.json": {
+    "mtime": 1794425280.3924682,
+    "seen": 1794479941.6801846,
+    "ast_hash": "eb1c7d5f29f8d265355ee7bfeafa4777",
+    "semantic_hash": ""
+  },
+  "package.json": {
+    "mtime": 1794479805.8642964,
+    "seen": 1794479941.6801858,
+    "ast_hash": "954b91e3b83e2b556f7af1007294ed06",
+    "semantic_hash": ""
+  },
+  "projects/demo/src/app/app.config.ts": {
+    "mtime": 1794482312.001141,
+    "seen": 1794503913.454523,
+    "ast_hash": "4b5ee64ae5fefa2aa7e611d3bfcae2a3",
+    "semantic_hash": ""
+  },
+  "projects/demo/src/app/app.spec.ts": {
+    "mtime": 1794425515.768519,
+    "seen": 1794479941.6801877,
+    "ast_hash": "4c63ffb415820f1156adf93ffa21c1c8",
+    "semantic_hash": ""
+  },
+  "projects/demo/src/app/app.ts": {
+    "mtime": 1794492444.9916964,
+    "seen": 1794503913.4545267,
+    "ast_hash": "859d593b05692aae2b683c451e205d3f",
+    "semantic_hash": ""
+  },
+  "projects/demo/src/app/cells.spec.ts": {
+    "mtime": 1794484461.4321187,
+    "seen": 1794503913.454528,
+    "ast_hash": "47d798eaf683cb59f50b3ce3b8a87c44",
+    "semantic_hash": ""
+  },
+  "projects/demo/src/app/cells.ts": {
+    "mtime": 1794484461.431995,
+    "seen": 1794503913.4545293,
+    "ast_hash": "20d53213ad3c2c291605beccec021aba",
+    "semantic_hash": ""
+  },
+  "projects/demo/src/app/generate-graph.spec.ts": {
+    "mtime": 1794430092.9943614,
+    "seen": 1794479941.680191,
+    "ast_hash": "ba99cff3dfb47d885acc14569435c223",
+    "semantic_hash": ""
+  },
+  "projects/demo/src/app/generate-graph.ts": {
+    "mtime": 1794446015.2593768,
+    "seen": 1794479941.680192,
+    "ast_hash": "8dbc5f468e5c2ac50ef64bbf5181bb68",
+    "semantic_hash": ""
+  },
+  "projects/demo/src/app/geojson-graph.spec.ts": {
+    "mtime": 1794478948.5585964,
+    "seen": 1794479941.6801927,
+    "ast_hash": "5cc1546ec5fe0f63b482f5cb75a9b845",
+    "semantic_hash": ""
+  },
+  "projects/demo/src/app/geojson-graph.ts": {
+    "mtime": 1794478974.2332041,
+    "seen": 1794479941.6801934,
+    "ast_hash": "bb1b858201d9e5510f10297a1bea0b43",
+    "semantic_hash": ""
+  },
+  "projects/demo/src/app/node-editor.ts": {
+    "mtime": 1794446027.2873757,
+    "seen": 1794479941.6801944,
+    "ast_hash": "609d3b492edcc2ef53e677f8682dc587",
+    "semantic_hash": ""
+  },
+  "projects/demo/src/app/result-preview.ts": {
+    "mtime": 1794445271.3960166,
+    "seen": 1794479941.680195,
+    "ast_hash": "9fe42309c652a22c5ef41ce4f34d2026",
+    "semantic_hash": ""
+  },
+  "projects/demo/src/main.ts": {
+    "mtime": 1794425280.3364682,
+    "seen": 1794479941.680196,
+    "ast_hash": "f3983daa46dc263bf3c8d0dd448a5a01",
+    "semantic_hash": ""
+  },
+  "projects/demo/tsconfig.app.json": {
+    "mtime": 1794425280.364468,
+    "seen": 1794479941.6801968,
+    "ast_hash": "949e575787d836d9bfc16fb8e8c29a4a",
+    "semantic_hash": ""
+  },
+  "projects/demo/tsconfig.spec.json": {
+    "mtime": 1794425280.368468,
+    "seen": 1794479941.6801977,
+    "ast_hash": "34cd9e5d44400eface1ca48143692591",
+    "semantic_hash": ""
+  },
+  "projects/ngx-node-flow/ng-package.json": {
+    "mtime": 1794425279.2084682,
+    "seen": 1794479941.6801984,
+    "ast_hash": "7e4c9ef3a826f90a3d6ef61dc9a1b42a",
+    "semantic_hash": ""
+  },
+  "projects/ngx-node-flow/package.json": {
+    "mtime": 1794425264.7506783,
+    "seen": 1794479941.6801991,
+    "ast_hash": "134feff07d9fcb095829bfd7e6539982",
+    "semantic_hash": ""
+  },
+  "projects/ngx-node-flow/src/lib/clipboard.spec.ts": {
+    "mtime": 1794446297.7585258,
+    "seen": 1794479941.6801999,
+    "ast_hash": "6398c18aee735b625439c7522fb5af6e",
+    "semantic_hash": ""
+  },
+  "projects/ngx-node-flow/src/lib/clipboard.ts": {
+    "mtime": 1794480235.3537192,
+    "seen": 1794480647.6298916,
+    "ast_hash": "2db275b06c6cabd01e642f5db7eb7590",
+    "semantic_hash": ""
+  },
+  "projects/ngx-node-flow/src/lib/config.ts": {
+    "mtime": 1794482312.0008209,
+    "seen": 1794503913.4545493,
+    "ast_hash": "c00c75cd9504cae25bf911c2fe8bb817",
+    "semantic_hash": ""
+  },
+  "projects/ngx-node-flow/src/lib/errors.spec.ts": {
+    "mtime": 1794445271.3966494,
+    "seen": 1794479941.6802022,
+    "ast_hash": "bbf23183f959b39faf6938946caf6da1",
+    "semantic_hash": ""
+  },
+  "projects/ngx-node-flow/src/lib/errors.ts": {
+    "mtime": 1794445912.4864795,
+    "seen": 1794479941.680203,
+    "ast_hash": "8211ae9564e7db66c467a47500518321",
+    "semantic_hash": ""
+  },
+  "projects/ngx-node-flow/src/lib/geometry.spec.ts": {
+    "mtime": 1794480190.1246784,
+    "seen": 1794480647.6299622,
+    "ast_hash": "ced9e6b4f7b11289f6dcb71d6f300ee1",
+    "semantic_hash": ""
+  },
+  "projects/ngx-node-flow/src/lib/geometry.ts": {
+    "mtime": 1794480190.1203427,
+    "seen": 1794480647.6299636,
+    "ast_hash": "61073a57c39a6601f70931bb74bcc3cb",
+    "semantic_hash": ""
+  },
+  "projects/ngx-node-flow/src/lib/gl.ts": {
+    "mtime": 1794480178.1963437,
+    "seen": 1794480647.629965,
+    "ast_hash": "9a87112c762139f5b269134b754206a5",
+    "semantic_hash": ""
+  },
+  "projects/ngx-node-flow/src/lib/node-flow-editor.ts": {
+    "mtime": 1794426588.1927352,
+    "seen": 1794479941.6802063,
+    "ast_hash": "7e72ca3fa0446002b70633e979a1ffac",
+    "semantic_hash": ""
+  },
+  "projects/ngx-node-flow/src/lib/node-flow.ts": {
+    "mtime": 1794502285.623917,
+    "seen": 1794503913.4545577,
+    "ast_hash": "f0d3f5ad965fce93ac9ba61311effd62",
+    "semantic_hash": ""
+  },
+  "projects/ngx-node-flow/src/lib/renderer.worker.ts": {
+    "mtime": 1794487050.4919832,
+    "seen": 1794503913.4545584,
+    "ast_hash": "08fd1291c037c6b4c4e1ca386dfd9343",
+    "semantic_hash": ""
+  },
+  "projects/ngx-node-flow/src/lib/store.spec.ts": {
+    "mtime": 1794481658.360268,
+    "seen": 1794481679.473157,
+    "ast_hash": "903eb455635bd22a4f7e2fec7816acd1",
+    "semantic_hash": ""
+  },
+  "projects/ngx-node-flow/src/lib/store.ts": {
+    "mtime": 1794481642.0852854,
+    "seen": 1794481679.4731581,
+    "ast_hash": "c937698a7b64ae5c09c8d59bde105fe5",
+    "semantic_hash": ""
+  },
+  "projects/ngx-node-flow/src/lib/stream.spec.ts": {
+    "mtime": 1794445271.3986602,
+    "seen": 1794479941.68021,
+    "ast_hash": "4bfa6e6f55827e41a60bd212138e2df5",
+    "semantic_hash": ""
+  },
+  "projects/ngx-node-flow/src/lib/stream.ts": {
+    "mtime": 1794445271.3988965,
+    "seen": 1794479941.6802108,
+    "ast_hash": "3192e4169968a718f29f0f3aa0117b67",
+    "semantic_hash": ""
+  },
+  "projects/ngx-node-flow/src/lib/theme.spec.ts": {
+    "mtime": 1794428978.5147738,
+    "seen": 1794479941.6802118,
+    "ast_hash": "b87c2b2876acab4997f9d473c4927f84",
+    "semantic_hash": ""
+  },
+  "projects/ngx-node-flow/src/lib/theme.ts": {
+    "mtime": 1794445271.3991156,
+    "seen": 1794479941.6802125,
+    "ast_hash": "55a48f126f02d3be13c00978f0a79af5",
+    "semantic_hash": ""
+  },
+  "projects/ngx-node-flow/src/lib/types.ts": {
+    "mtime": 1794482312.0008209,
+    "seen": 1794503913.4545655,
+    "ast_hash": "f2c41995734074ee1516fb1f1e88b280",
+    "semantic_hash": ""
+  },
+  "projects/ngx-node-flow/src/public-api.ts": {
+    "mtime": 1794480433.7339005,
+    "seen": 1794480647.6301987,
+    "ast_hash": "2e95b7fe7cb3ee709609d0a11bd3d966",
+    "semantic_hash": ""
+  },
+  "projects/ngx-node-flow/tsconfig.lib.json": {
+    "mtime": 1794425279.2244682,
+    "seen": 1794479941.680215,
+    "ast_hash": "3b334de7313301c855da6fbf980eae8d",
+    "semantic_hash": ""
+  },
+  "projects/ngx-node-flow/tsconfig.lib.prod.json": {
+    "mtime": 1794425264.750772,
+    "seen": 1794479941.6802156,
+    "ast_hash": "61b63c5f48a92f8a26089298d8067528",
+    "semantic_hash": ""
+  },
+  "projects/ngx-node-flow/tsconfig.spec.json": {
+    "mtime": 1794425279.2324681,
+    "seen": 1794479941.6802163,
+    "ast_hash": "eb9143a84a3b93834d5fbe2fbbc2deb2",
+    "semantic_hash": ""
+  },
+  "scripts/build-worker.mjs": {
+    "mtime": 1794425465.248456,
+    "seen": 1794479941.6802177,
+    "ast_hash": "0d82333750d2d43e696d8462f1b07337",
+    "semantic_hash": ""
+  },
+  "tsconfig.json": {
+    "mtime": 1794480582.8500156,
+    "seen": 1794480647.6303093,
+    "ast_hash": "46cbcf7acbe2675313aa40bfb61a192f",
+    "semantic_hash": ""
+  },
+  ".claude/rules/coding-workflow.md": {
+    "mtime": 1794426533.3313615,
+    "seen": 1794479941.6802194,
+    "ast_hash": "e5900b02f6a21c6112a705e6b7af9399",
+    "semantic_hash": ""
+  },
+  ".claude/skills/typescripter/SKILL.md": {
+    "mtime": 1794479763.41753,
+    "seen": 1794479941.6802201,
+    "ast_hash": "0aeed2033a9958e691caf64f0b1346d4",
+    "semantic_hash": ""
+  },
+  "CLAUDE.md": {
+    "mtime": 1794426559.4333718,
+    "seen": 1794479941.680221,
+    "ast_hash": "fb6e75225db425c1d83ceefc8e8ff2b4",
+    "semantic_hash": ""
+  },
+  "README.md": {
+    "mtime": 1794425250.2016568,
+    "seen": 1794479941.680222,
+    "ast_hash": "031a4a29fe6badbfef4cf1e419f242dc",
+    "semantic_hash": ""
+  },
+  "feature.md": {
+    "mtime": 1794445525.7393422,
+    "seen": 1794479941.6802227,
+    "ast_hash": "92ea30770065eebfdfbeea6934102d45",
+    "semantic_hash": ""
+  },
+  "projects/demo/src/app/app.html": {
+    "mtime": 1794492633.6042209,
+    "seen": 1794503913.4545815,
+    "ast_hash": "a4bc0f50b22f0d114608063d07f6d87a",
+    "semantic_hash": ""
+  },
+  "projects/demo/src/index.html": {
+    "mtime": 1794425280.3804681,
+    "seen": 1794479941.680224,
+    "ast_hash": "d002af4c9d6c47911d940d008e9ab333",
+    "semantic_hash": ""
+  },
+  "projects/ngx-node-flow/README.md": {
+    "mtime": 1794482334.1962285,
+    "seen": 1794503913.4545836,
+    "ast_hash": "f604fe1bd0da372ea6bbaaaa7afaac17",
+    "semantic_hash": ""
+  },
+  "projects/ngx-node-flow/layout/ng-package.json": {
+    "mtime": 1794480569.580408,
+    "seen": 1794480647.6297927,
+    "ast_hash": "ba10901ecaf9bad43160a575bfc021e3",
+    "semantic_hash": ""
+  },
+  "projects/ngx-node-flow/layout/src/layered.ts": {
+    "mtime": 1794480569.5761683,
+    "seen": 1794480647.6297948,
+    "ast_hash": "59f84114692403d444719a4688c9dacf",
+    "semantic_hash": ""
+  },
+  "projects/ngx-node-flow/layout/src/public-api.ts": {
+    "mtime": 1794480569.5815954,
+    "seen": 1794480647.629796,
+    "ast_hash": "fc67cc77becf9a18117de5793532c942",
+    "semantic_hash": ""
+  },
+  "projects/ngx-node-flow/src/lib/layered.spec.ts": {
+    "mtime": 1794480569.5827916,
+    "seen": 1794480647.6299663,
+    "ast_hash": "cf0be0fbd4fa65be3e09a3732e3ff6a3",
+    "semantic_hash": ""
+  },
+  ".claude/skills/accessibility-tester/SKILL.md": {
+    "mtime": 1794480596.5202532,
+    "seen": 1794480647.6303422,
+    "ast_hash": "6b9baa7bad3832cd205a6574fac10dab",
+    "semantic_hash": ""
+  },
+  ".claude/skills/code-reviewer/SKILL.md": {
+    "mtime": 1794480630.190189,
+    "seen": 1794480647.6303437,
+    "ast_hash": "ec3b15cfc4c6935f6112b600285cceeb",
+    "semantic_hash": ""
+  },
+  ".claude/skills/qa-expert/SKILL.md": {
+    "mtime": 1794480649.4753723,
+    "seen": 1794481679.4736462,
+    "ast_hash": "b7bd3fec2e49c896e04164f7f160e1cd",
+    "semantic_hash": ""
+  },
+  ".claude/rules/post-task-review.md": {
+    "mtime": 1794492510.2438455,
+    "seen": 1794503913.4545736,
+    "ast_hash": "926f56a8159be459bc5ef808ee919bc2",
+    "semantic_hash": ""
+  },
+  "package-lock.json": {
+    "mtime": 1794425345.6364625,
+    "seen": 1794479941.6802258,
+    "ast_hash": "5faab6291467659649095a68ee73fbaf",
+    "semantic_hash": ""
+  }
+}
