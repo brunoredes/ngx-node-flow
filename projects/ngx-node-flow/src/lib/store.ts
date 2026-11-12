@@ -13,6 +13,40 @@ type Ports = Pick<FlowNode, 'inputs' | 'outputs'>;
 type Extra = Omit<FlowNode, 'id' | 'x' | 'y' | 'label' | 'inputs' | 'outputs'>;
 type EdgeExtra = Omit<FlowEdge, 'id' | 'source' | 'sourcePort' | 'target' | 'targetPort'>;
 
+const NODE_BASE = new Set(['id', 'x', 'y', 'label', 'inputs', 'outputs'] as const);
+const EDGE_BASE = new Set(['id', 'source', 'sourcePort', 'target', 'targetPort'] as const);
+
+/**
+ * The keys of `o` outside `base`, or undefined when there are none (most items: then nothing is allocated).
+ * Null prototype, so a `__proto__` key arriving in data stays a plain key.
+ */
+function rest<T extends object, K extends keyof T & string>(o: T, base: ReadonlySet<K>): Omit<T, K> | undefined {
+  let out: Record<string, unknown> | undefined;
+  for (const k in o) if (!(base as ReadonlySet<string>).has(k)) (out ??= Object.create(null) as Record<string, unknown>)[k] = o[k];
+  return out as Omit<T, K> | undefined;
+}
+
+/**
+ * Same ports, compared key by key (a cheap check before building the intern key). Key order is ignored,
+ * so a match may come back with the interned list's key order: equal ports, not an identical JSON string.
+ */
+function samePorts(a: FlowPort[] | undefined, b: FlowPort[] | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] === b[i]) continue;
+    if (!a[i] || !b[i]) return false; // malformed entries: leave them to the JSON key, as before
+    let keys = 0;
+    for (const k in a[i]) {
+      keys++;
+      if (a[i][k as keyof FlowPort] !== b[i][k as keyof FlowPort]) return false;
+    }
+    for (const _ in b[i]) keys--;
+    if (keys) return false;
+  }
+  return true;
+}
+
 function grow<T extends Float64Array | Uint32Array | Uint8Array>(a: T, size: number): T {
   if (size <= a.length) return a;
   const b = new (a.constructor as new (n: number) => T)(Math.max(size, a.length * 2));
@@ -47,6 +81,8 @@ export class GraphStore {
   // interned port lists ({inputs, outputs} combos) and port ids
   private ports: Ports[] = [];
   private portsIdx = new Map<string, number>();
+  /** Last interned port list: bulk loads repeat the same ports, so most nodes match it without a key. */
+  private lastPorts = -1;
   private strs: string[] = [];
   private strIdx = new Map<string, number>();
   // edges
@@ -92,10 +128,12 @@ export class GraphStore {
   }
 
   private portsOf(n: Ports): number {
+    const last = this.ports[this.lastPorts];
+    if (last && samePorts(last.inputs, n.inputs) && samePorts(last.outputs, n.outputs)) return this.lastPorts;
     const key = JSON.stringify([n.inputs, n.outputs]);
     let i = this.portsIdx.get(key);
     if (i === undefined) this.portsIdx.set(key, (i = this.ports.push({ inputs: n.inputs?.map((p) => ({ ...p })), outputs: n.outputs?.map((p) => ({ ...p })) }) - 1));
-    return i;
+    return (this.lastPorts = i);
   }
 
   // --- slots ------------------------------------------------------------------
@@ -104,12 +142,15 @@ export class GraphStore {
     let s = this.nIdx.get(id);
     if (s !== undefined) return s;
     s = this.nFree.pop() ?? this.nId.length;
-    const size = s + 1;
-    this.nx = grow(this.nx, size);
-    this.ny = grow(this.ny, size);
-    this.nPorts = grow(this.nPorts, size);
-    this.nAlive = grow(this.nAlive, size);
-    this.nSeen = grow(this.nSeen, size);
+    if (s >= this.nx.length) {
+      // the node columns always share one length
+      const size = s + 1;
+      this.nx = grow(this.nx, size);
+      this.ny = grow(this.ny, size);
+      this.nPorts = grow(this.nPorts, size);
+      this.nAlive = grow(this.nAlive, size);
+      this.nSeen = grow(this.nSeen, size);
+    }
     this.nId[s] = id;
     this.nAlive[s] = 0;
     this.out[s] = undefined;
@@ -118,29 +159,33 @@ export class GraphStore {
     return s;
   }
 
-  private cells(s: number, fn: (key: number) => void) {
+  /** Adds slot `s` to (or removes it from) every grid cell its box touches. No callback: no closure per call. */
+  private cells(s: number, add: boolean) {
     const x = this.nx[s], y = this.ny[s];
     const x0 = Math.floor(x / CELL), x1 = Math.floor((x + this.cfg.node.width) / CELL);
     const y0 = Math.floor(y / CELL), y1 = Math.floor((y + nodeHeight(this.ports[this.nPorts[s]], this.cfg)) / CELL);
-    for (let cx = x0; cx <= x1; cx++) for (let cy = y0; cy <= y1; cy++) fn((cx + OFFSET) * 2 ** 21 + (cy + OFFSET));
+    for (let cx = x0; cx <= x1; cx++) {
+      for (let cy = y0; cy <= y1; cy++) {
+        const k = (cx + OFFSET) * 2 ** 21 + (cy + OFFSET);
+        const cell = this.grid.get(k);
+        if (add) {
+          if (cell) cell.push(s);
+          else this.grid.set(k, [s]);
+        } else if (cell) {
+          const i = cell.indexOf(s);
+          if (i >= 0) cell.splice(i, 1);
+          if (!cell.length) this.grid.delete(k);
+        }
+      }
+    }
   }
 
   private index(s: number) {
-    this.cells(s, (k) => {
-      const cell = this.grid.get(k);
-      if (cell) cell.push(s);
-      else this.grid.set(k, [s]);
-    });
+    this.cells(s, true);
   }
 
   private unindex(s: number) {
-    this.cells(s, (k) => {
-      const cell = this.grid.get(k);
-      if (!cell) return;
-      const i = cell.indexOf(s);
-      if (i >= 0) cell.splice(i, 1);
-      if (!cell.length) this.grid.delete(k);
-    });
+    this.cells(s, false);
   }
 
   private setNode(n: FlowNode): number {
@@ -153,10 +198,10 @@ export class GraphStore {
     this.ny[s] = n.y;
     this.nLabel[s] = n.label;
     this.nPorts[s] = this.portsOf(n);
-    const { id, x, y, label, inputs, outputs, ...extra } = n;
+    const extra = rest(n, NODE_BASE);
     this.setGroup(s, n.group);
-    if (Object.keys(extra).length) this.nExtra.set(s, extra);
-    else this.nExtra.delete(s);
+    if (extra) this.nExtra.set(s, extra);
+    else if (this.nExtra.size) this.nExtra.delete(s);
     this.index(s);
     return s;
   }
@@ -175,11 +220,14 @@ export class GraphStore {
     if (s !== undefined) this.deleteEdgeSlot(s);
     else if (this.tx && !this.tx.edges.has(e.id)) this.tx.edges.set(e.id, null);
     s = this.eFree.pop() ?? this.eId.length;
-    const size = s + 1;
-    this.eSrc = grow(this.eSrc, size);
-    this.eDst = grow(this.eDst, size);
-    this.eSp = grow(this.eSp, size);
-    this.eTp = grow(this.eTp, size);
+    if (s >= this.eSrc.length) {
+      // the edge columns always share one length
+      const size = s + 1;
+      this.eSrc = grow(this.eSrc, size);
+      this.eDst = grow(this.eDst, size);
+      this.eSp = grow(this.eSp, size);
+      this.eTp = grow(this.eTp, size);
+    }
     const src = this.slot(e.source), dst = this.slot(e.target);
     this.eId[s] = e.id;
     this.eSrc[s] = src;
@@ -187,8 +235,8 @@ export class GraphStore {
     this.eSp[s] = this.str(e.sourcePort);
     this.eTp[s] = this.str(e.targetPort);
     this.eIdx.set(e.id, s);
-    const { id, source, sourcePort, target, targetPort, ...extra } = e;
-    if (Object.keys(extra).length) this.eExtra.set(s, extra);
+    const extra = rest(e, EDGE_BASE);
+    if (extra) this.eExtra.set(s, extra);
     (this.out[src] ??= []).push(s);
     (this.inn[dst] ??= []).push(s);
     this.liveEdges++;
@@ -421,6 +469,7 @@ export class GraphStore {
 
   /** Moves slot `s` from its current group (read from nExtra, so call before overwriting it) to `group`. */
   private setGroup(s: number, group: string | undefined) {
+    if (group === undefined && !this.members.size) return; // no groups anywhere: nothing to move out of
     const prev = this.nAlive[s] ? this.nExtra.get(s)?.group : undefined;
     if (prev === group) return;
     if (prev !== undefined) this.members.get(prev)?.delete(s);
