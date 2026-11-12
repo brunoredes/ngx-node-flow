@@ -43,7 +43,8 @@ export type ResolvedTheme = Record<keyof NodeFlowTheme, string>;
 export interface NodeFlowConfig {
   grid: { size: number; visible: boolean };
   node: { width: number; height: number; radius: number; portRadius: number; fontSize: number };
-  edge: { width: number };
+  /** allowCycles: false refuses a drag-created edge that would close a cycle (loaded data is not checked). */
+  edge: { width: number; allowCycles: boolean };
   zoom: { min: number; max: number };
   theme: NodeFlowTheme;
   labels: NodeFlowLabels;
@@ -103,6 +104,7 @@ export type ToWorker =
 export type FromWorker =
   | { type: 'nodeClick'; id: string }
   | { type: 'edgeCreated'; edge: FlowEdge }
+  | { type: 'edgeRejected'; edge: FlowEdge; reason: 'cycle' }
   | { type: 'changes'; changes: GraphChanges }
   | { type: 'stats'; nodes: number; edges: number }
   | { type: 'reply'; reqId: number; value?: unknown; error?: string }

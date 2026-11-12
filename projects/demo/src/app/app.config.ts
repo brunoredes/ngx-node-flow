@@ -6,6 +6,8 @@ export const appConfig: ApplicationConfig = {
     provideBrowserGlobalErrorListeners(),
     provideNodeFlow({
       grid: { size: 12 },
+      // the cell flow is a DAG; the streamed 1M ring is loaded data, which is not checked
+      edge: { allowCycles: false },
       labels: {
         canvas: 'Editor de fluxo',
         nodeActions: 'Ações da célula',

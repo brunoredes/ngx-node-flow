@@ -2,5 +2,6 @@
 export type { FlowNode, FlowEdge, NewFlowNode, NodeFlowTheme, NodeFlowLabels, NodeFlowConfig, NodeFlowOptions, GraphChunk, GraphChanges } from './lib/types';
 export { provideNodeFlow, NODE_FLOW_CONFIG, DEFAULT_NODE_FLOW_CONFIG, DEFAULT_NODE_FLOW_THEME } from './lib/config';
 export { applyChanges } from './lib/store';
+export { EdgeRejectedError, type EdgeRejectReason } from './lib/errors';
 export { NodeFlowEditor, type NodeFlowEditorContext } from './lib/node-flow-editor';
 export { NodeFlow } from './lib/node-flow';

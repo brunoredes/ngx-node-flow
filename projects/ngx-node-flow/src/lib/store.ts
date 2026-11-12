@@ -33,7 +33,9 @@ export class GraphStore {
   private nAlive = new Uint8Array(1024);
   private nSeen = new Uint32Array(1024);
   private nExtra = new Map<number, Extra>();
-  private adj: (number[] | undefined)[] = [];
+  // directed adjacency (edge slots): traversals follow `out` without filtering by direction
+  private out: (number[] | undefined)[] = [];
+  private inn: (number[] | undefined)[] = [];
   private nFree: number[] = [];
   private liveNodes = 0;
   private stamp = 0;
@@ -95,7 +97,8 @@ export class GraphStore {
     this.nSeen = grow(this.nSeen, size);
     this.nId[s] = id;
     this.nAlive[s] = 0;
-    this.adj[s] = undefined;
+    this.out[s] = undefined;
+    this.inn[s] = undefined;
     this.nIdx.set(id, s);
     return s;
   }
@@ -166,9 +169,15 @@ export class GraphStore {
     this.eSp[s] = this.str(e.sourcePort);
     this.eTp[s] = this.str(e.targetPort);
     this.eIdx.set(e.id, s);
-    (this.adj[src] ??= []).push(s);
-    if (dst !== src) (this.adj[dst] ??= []).push(s);
+    (this.out[src] ??= []).push(s);
+    (this.inn[dst] ??= []).push(s);
     this.liveEdges++;
+  }
+
+  /** Edge slots touching node slot `s`, each once (a self-loop is in both lists). */
+  private edgesAt(s: number): number[] {
+    const out = this.out[s] ?? [], inn = this.inn[s] ?? [];
+    return [...inn, ...out.filter((e) => this.eDst[e] !== s)];
   }
 
   private matEdge(s: number): FlowEdge {
@@ -176,8 +185,7 @@ export class GraphStore {
   }
 
   private deleteEdgeSlot(s: number) {
-    for (const n of [this.eSrc[s], this.eDst[s]]) {
-      const list = this.adj[n];
+    for (const list of [this.out[this.eSrc[s]], this.inn[this.eDst[s]]]) {
       const i = list?.indexOf(s) ?? -1;
       if (i >= 0) list!.splice(i, 1);
     }
@@ -231,7 +239,9 @@ export class GraphStore {
     const seen = new Set<number>();
     for (const n of nodes) {
       const s = this.nIdx.get(n.id);
-      if (s !== undefined) this.adj[s]?.forEach((e) => seen.add(e));
+      if (s === undefined) continue;
+      this.out[s]?.forEach((e) => seen.add(e));
+      this.inn[s]?.forEach((e) => seen.add(e));
     }
     return [...seen].map((e) => this.matEdge(e));
   }
@@ -241,9 +251,36 @@ export class GraphStore {
     const s = this.nIdx.get(nodeId);
     const p = this.strIdx.get(port);
     if (s === undefined || p === undefined) return undefined;
-    const list = this.adj[s] ?? [];
-    for (let i = list.length - 1; i >= 0; i--) if (this.eDst[list[i]] === s && this.eTp[list[i]] === p) return this.matEdge(list[i]);
+    const list = this.inn[s] ?? [];
+    for (let i = list.length - 1; i >= 0; i--) if (this.eTp[list[i]] === p) return this.matEdge(list[i]);
     return undefined;
+  }
+
+  /**
+   * Whether `toId` can be reached from `fromId` along edge direction (a node reaches itself).
+   * Iterative DFS with early exit: graphs here can be 1M deep, so no recursion. Cost is the
+   * part of the graph downstream of `fromId`, worst case the whole graph (e.g. one big ring).
+   */
+  reaches(fromId: string, toId: string): boolean {
+    const from = this.nIdx.get(fromId), to = this.nIdx.get(toId);
+    if (from === undefined || to === undefined) return false;
+    const stamp = ++this.stamp; // nSeen doubles as the visited set, no allocation per call
+    this.nSeen[from] = stamp;
+    const stack = [from];
+    while (stack.length) {
+      const u = stack.pop()!;
+      if (u === to) return true;
+      const list = this.out[u];
+      if (!list) continue;
+      for (let i = 0; i < list.length; i++) {
+        const v = this.eDst[list[i]];
+        if (this.nSeen[v] !== stamp) {
+          this.nSeen[v] = stamp;
+          stack.push(v);
+        }
+      }
+    }
+    return false;
   }
 
   hit(wx: number, wy: number): Hit | null {
@@ -271,7 +308,7 @@ export class GraphStore {
   connect(edge: FlowEdge): GraphChanges | null {
     const src = this.nIdx.get(edge.source), dst = this.nIdx.get(edge.target);
     const sp = this.strIdx.get(edge.sourcePort), tp = this.strIdx.get(edge.targetPort);
-    const dup = src !== undefined && this.adj[src]?.some((e) => this.eSrc[e] === src && this.eDst[e] === dst && this.eSp[e] === sp && this.eTp[e] === tp);
+    const dup = src !== undefined && this.out[src]?.some((e) => this.eDst[e] === dst && this.eSp[e] === sp && this.eTp[e] === tp);
     if (dup) return null;
     this.setEdge(edge);
     return { ...noChanges(), upsertEdges: [edge] };
@@ -302,7 +339,7 @@ export class GraphStore {
 
     const changes: GraphChanges & { node?: FlowNode } = { ...noChanges(), upsertNodes: [node], node };
     const s = this.nIdx.get(from.id)!;
-    const used = new Set((this.adj[s] ?? []).filter((e) => this.eSrc[e] === s).map((e) => this.strs[this.eSp[e]]));
+    const used = new Set((this.out[s] ?? []).map((e) => this.strs[this.eSp[e]]));
     const outs = from.outputs ?? [];
     const port = outs.find((p) => !used.has(p)) ?? outs[0];
     const input = node.inputs?.[0];
@@ -318,7 +355,7 @@ export class GraphStore {
   remove(id: string): GraphChanges {
     const s = this.nIdx.get(id);
     if (s === undefined || !this.nAlive[s]) return noChanges();
-    const removeEdges = [...(this.adj[s] ?? [])].map((e) => {
+    const removeEdges = this.edgesAt(s).map((e) => {
       const edgeId = this.eId[e];
       this.deleteEdgeSlot(e);
       return edgeId;
@@ -328,7 +365,8 @@ export class GraphStore {
     this.nIdx.delete(id);
     this.nExtra.delete(s);
     this.z.delete(s);
-    this.adj[s] = undefined;
+    this.out[s] = undefined;
+    this.inn[s] = undefined;
     this.nFree.push(s);
     this.liveNodes--;
     return { ...noChanges(), removeNodes: [id], removeEdges };
@@ -338,7 +376,7 @@ export class GraphStore {
   upsertNode(node: FlowNode): GraphChanges {
     const s = this.setNode(node);
     const removeEdges: string[] = [];
-    for (const e of [...(this.adj[s] ?? [])]) {
+    for (const e of this.edgesAt(s)) {
       const gone =
         (this.eSrc[e] === s && !node.outputs?.includes(this.strs[this.eSp[e]])) ||
         (this.eDst[e] === s && !node.inputs?.includes(this.strs[this.eTp[e]]));
