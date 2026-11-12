@@ -8,7 +8,8 @@
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
     "paths": {
-      "ngx-node-flow": ["./dist/ngx-node-flow"]
+      "ngx-node-flow": ["./dist/ngx-node-flow"],
+      "ngx-node-flow/*": ["./dist/ngx-node-flow/*"]
     },
     "skipLibCheck": true,
     "isolatedModules": true,

@@ -60,6 +60,11 @@ export class GraphStore {
   private grid = new Map<number, number[]>();
   private z = new Map<number, number>();
   private zTop = 0;
+  /** group id -> member slots */
+  private members = new Map<string, Set<number>>();
+  private boundsCache = new Map<string, { rev: number; b: { x0: number; y0: number; x1: number; y1: number } | null }>();
+  /** Collapsed groups: their members are left out of query() and hit(). View state, set by the worker. */
+  collapsed = new Set<string>();
   /** Bumped whenever a node is added, moved, replaced or removed. */
   revision = 0;
   // open transaction: state of each touched node/edge before its first change (null = did not exist)
@@ -147,6 +152,7 @@ export class GraphStore {
     this.nLabel[s] = n.label;
     this.nPorts[s] = this.portsOf(n);
     const { id, x, y, label, inputs, outputs, ...extra } = n;
+    this.setGroup(s, n.group);
     if (Object.keys(extra).length) this.nExtra.set(s, extra);
     else this.nExtra.delete(s);
     this.index(s);
@@ -262,7 +268,9 @@ export class GraphStore {
   // --- ingestion ----------------------------------------------------------------
 
   reset(nodes: FlowNode[], edges: FlowEdge[]) {
+    const { collapsed } = this;
     Object.assign(this, new GraphStore(this.cfg)); // fresh columns, same instance
+    this.collapsed = collapsed; // view state survives a new graph
     this.addChunk({ nodes, edges });
   }
 
@@ -310,6 +318,7 @@ export class GraphStore {
         if (!cell) continue;
         for (const s of cell) {
           if (this.nSeen[s] === stamp) continue;
+          if (this.collapsed.size && this.collapsed.has(this.nExtra.get(s)?.group ?? '')) continue; // inside a collapsed group
           this.nSeen[s] = stamp;
           const x = this.nx[s], y = this.ny[s];
           if (x <= x1 && y <= y1 && x + w >= x0 && y + nodeHeight(this.ports[this.nPorts[s]], this.cfg) >= y0) hits.push(s);
@@ -352,6 +361,52 @@ export class GraphStore {
       this.out[s]?.forEach((e) => inside.has(this.eDst[e]) && edges.push(this.matEdge(e)));
     }
     return { nodes, edges };
+  }
+
+  // --- groups --------------------------------------------------------------------
+
+  /** Moves slot `s` from its current group (read from nExtra, so call before overwriting it) to `group`. */
+  private setGroup(s: number, group: string | undefined) {
+    const prev = this.nAlive[s] ? this.nExtra.get(s)?.group : undefined;
+    if (prev === group) return;
+    if (prev !== undefined) this.members.get(prev)?.delete(s);
+    if (group !== undefined) {
+      let set = this.members.get(group);
+      if (!set) this.members.set(group, (set = new Set()));
+      set.add(s);
+    }
+  }
+
+  /** Ids of groups that have at least one live member. */
+  groups(): string[] {
+    return [...this.members].filter(([, m]) => m.size).map(([id]) => id);
+  }
+
+  groupSize(id: string): number {
+    return this.members.get(id)?.size ?? 0;
+  }
+
+  /** Whether the node is hidden inside a collapsed group (query() and hit() skip it). */
+  hidden(id: string): boolean {
+    const s = this.nIdx.get(id);
+    return s !== undefined && this.collapsed.has(this.nExtra.get(s)?.group ?? '');
+  }
+
+  /**
+   * World bounding box of a group's members, cached until the graph changes.
+   * shortcut: any change (even a drag elsewhere) recomputes every group from its members; fine for
+   * groups of thousands, slow for one group of a million while dragging. Cache per group to scale.
+   */
+  groupBounds(id: string): { x0: number; y0: number; x1: number; y1: number } | null {
+    const hit = this.boundsCache.get(id);
+    if (hit && hit.rev === this.revision) return hit.b;
+    let b: { x0: number; y0: number; x1: number; y1: number } | null = null;
+    for (const s of this.members.get(id) ?? []) {
+      const x = this.nx[s], y = this.ny[s], x1 = x + this.cfg.node.width, y1 = y + nodeHeight(this.ports[this.nPorts[s]], this.cfg);
+      b = b ? { x0: Math.min(b.x0, x), y0: Math.min(b.y0, y), x1: Math.max(b.x1, x1), y1: Math.max(b.y1, y1) } : { x0: x, y0: y, x1, y1 };
+    }
+    this.boundsCache.set(id, { rev: this.revision, b });
+    return b;
   }
 
   /** Ids of every live node. */
@@ -513,6 +568,7 @@ export class GraphStore {
       return edgeId;
     });
     this.unindex(s);
+    this.setGroup(s, undefined); // reads the group while the slot is still alive
     this.nAlive[s] = 0;
     this.nIdx.delete(id);
     this.nExtra.delete(s);

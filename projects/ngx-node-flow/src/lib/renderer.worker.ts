@@ -1,9 +1,9 @@
 /// Runs inside a Worker: owns the canvases, camera and interaction state.
 /// Bundled to a string by scripts/build-worker.mjs (see worker-source.ts).
-import { align, Camera, dashes, distToPolyline, MINIMAP, nodeHeight, portPos, route, Side, toWorld, zoomAt } from './geometry';
+import { align, Camera, dashes, distToPolyline, MINIMAP, nodeHeight, portPos, Rect, route, Side, toWorld, zoomAt } from './geometry';
 import { GlRenderer, RECT_STRIDE, RGBA } from './gl';
 import { cloneGraph, GraphStore, noChanges } from './store';
-import { Command, FlowEdge, FlowNode, FromWorker, GraphChanges, GraphChunk, GraphSnapshot, NodeFlowConfig, NodeStatus, ResolvedTheme, ToWorker } from './types';
+import { Command, FlowEdge, FlowGroup, FlowNode, FromWorker, GraphChanges, GraphChunk, GraphSnapshot, NodeFlowConfig, NodeStatus, ResolvedTheme, ToWorker } from './types';
 
 const HEADER_TEXT_Y = 12;
 const PAD = 10;
@@ -44,7 +44,8 @@ let focused: string | null = null;
 let focusVisible = false;
 
 type Drag =
-  | { kind: 'pan'; sx: number; sy: number }
+  /** group: pressed on a group header / collapsed group; toggles it on release unless the press became a pan. */
+  | { kind: 'pan'; sx: number; sy: number; group?: string; moved?: boolean }
   | { kind: 'marquee'; x0: number; y0: number; x1: number; y1: number }
   /** group: nodes that move with the pointer and where they started (empty when readonly or all locked). */
   | {
@@ -95,11 +96,61 @@ function portIndex(n: FlowNode, side: Side, id: string) {
 
 /** The edge's curve as a polyline (edge.routing), or null if an endpoint is missing. */
 function curve(e: FlowEdge, segments: number): number[] | null {
-  const s = store.node(e.source), t = store.node(e.target);
-  if (!s || !t) return null;
-  const a = portPos(s, 'out', portIndex(s, 'out', e.sourcePort), cfg);
-  const b = portPos(t, 'in', portIndex(t, 'in', e.targetPort), cfg);
-  return route(a.x, a.y, b.x, b.y, cfg.edge.routing, segments);
+  const a = endpoint(e.source, 'out', e.sourcePort), b = endpoint(e.target, 'in', e.targetPort);
+  return a && b ? route(a.x, a.y, b.x, b.y, cfg.edge.routing, segments) : null;
+}
+
+/** Where an edge attaches: the port, or the side of the collapsed group hiding the node. */
+function endpoint(id: string, side: Side, port: string): { x: number; y: number } | null {
+  const n = store.node(id);
+  if (!n) return null;
+  const b = n.group !== undefined && store.hidden(id) ? store.groupBounds(n.group) : null;
+  if (b) return { x: side === 'out' ? b.x0 + cfg.node.width : b.x0, y: b.y0 + cfg.node.height / 2 };
+  return portPos(n, side, portIndex(n, side, port), cfg);
+}
+
+// --- groups: expanded = a frame behind its members with a clickable header; collapsed = one node-sized box
+const FRAME_PAD = 16, FRAME_HEADER = 24;
+let groupInfo = new Map<string, FlowGroup>();
+/** Groups drawn in the last frame (what a click can hit). hit: the clickable part (header, or the whole box). */
+let drawnGroups: { id: string; collapsed: boolean; frame: Rect; hit: Rect }[] = [];
+
+function groupRects(tl: { x: number; y: number }, br: { x: number; y: number }) {
+  drawnGroups = [];
+  for (const id of store.groups()) {
+    const b = store.groupBounds(id)!;
+    const collapsed = store.collapsed.has(id);
+    const frame = collapsed
+      ? { x: b.x0, y: b.y0, w: cfg.node.width, h: cfg.node.height }
+      : { x: b.x0 - FRAME_PAD, y: b.y0 - FRAME_PAD - FRAME_HEADER, w: b.x1 - b.x0 + 2 * FRAME_PAD, h: b.y1 - b.y0 + 2 * FRAME_PAD + FRAME_HEADER };
+    if (frame.x > br.x || frame.y > br.y || frame.x + frame.w < tl.x || frame.y + frame.h < tl.y) continue;
+    drawnGroups.push({ id, collapsed, frame, hit: collapsed ? frame : { ...frame, h: FRAME_HEADER } });
+  }
+}
+
+function groupAt(wx: number, wy: number): string | undefined {
+  for (let i = drawnGroups.length - 1; i >= 0; i--) {
+    const r = drawnGroups[i].hit;
+    if (wx >= r.x && wx <= r.x + r.w && wy >= r.y && wy <= r.y + r.h) return drawnGroups[i].id;
+  }
+  return undefined;
+}
+
+const groupLabel = (id: string) => groupInfo.get(id)?.label ?? id;
+
+/** Collapses or expands a group (omit `collapsed` to toggle). Hidden nodes leave the selection. */
+function toggleGroup(id: string, collapsed = !store.collapsed.has(id)): boolean {
+  if (collapsed === store.collapsed.has(id)) return collapsed;
+  if (collapsed) store.collapsed.add(id);
+  else store.collapsed.delete(id);
+  if (collapsed) {
+    const kept = [...selNodes].filter((n) => !store.hidden(n));
+    if (kept.length !== selNodes.size) selectOnly(kept, selEdges);
+    if (focused && store.hidden(focused)) focused = null;
+  }
+  send({ type: 'groupToggled', id, label: groupLabel(id), collapsed });
+  schedule();
+  return collapsed;
 }
 
 /** The decoded icon, or undefined while it loads (the frame is redrawn when it arrives) or if it failed. */
@@ -184,13 +235,26 @@ function render() {
   const highlighting = hiNodes.size > 0 || hiEdges.size > 0;
 
   drawnNodes = visible;
-  let rectCount = visible.length * 2 + 4; // + focus ring or status badge per node, selection rectangle, two guide lines
+  groupRects(tl, br);
+  // + focus ring or status badge per node, two per group, selection rectangle, two guide lines
+  let rectCount = visible.length * 2 + drawnGroups.length * 2 + 4;
   if (showPorts) for (const n of visible) rectCount += (n.inputs?.length ?? 0) + (n.outputs?.length ?? 0);
   if (rects.length < rectCount * RECT_STRIDE) rects = new Float32Array(rectCount * RECT_STRIDE * 2);
 
   // while connecting, ports the dragged edge cannot land on are dimmed (cycles are only checked on drop)
   const link = drag?.kind === 'link' ? drag : null;
   let ri = 0;
+  for (const g of drawnGroups) {
+    const { x, y, w, h } = g.frame;
+    if (g.collapsed) {
+      const ring = 2 / cam.zoom;
+      pushRect(ri++, x - ring, y - ring, w + 2 * ring, h + 2 * ring, withAlpha(accent, 0.6), c.radius + ring);
+      pushRect(ri++, x, y, w, h, rgba(theme.nodeColor), c.radius);
+    } else {
+      pushRect(ri++, x, y, w, h, withAlpha(accent, 0.08), c.radius);
+      pushRect(ri++, x, y, w, FRAME_HEADER, withAlpha(accent, 0.18), c.radius);
+    }
+  }
   for (const n of visible) {
     const h = nodeHeight(n, cfg);
     const alpha = highlighting && !hiNodes.has(n.id) ? DIM : 1;
@@ -377,6 +441,14 @@ function drawText(visible: FlowNode[], edges: FlowEdge[], highlighting: boolean)
     text.fillText(e.label, x, y);
   }
   text.globalAlpha = 1;
+  // group titles: a disclosure triangle shows what a click on them does
+  text.textAlign = 'left';
+  text.fillStyle = theme.nodeTextColor;
+  for (const g of drawnGroups) {
+    const label = g.collapsed ? `▸ ${groupLabel(g.id)} (${store.groupSize(g.id)})` : `▾ ${groupLabel(g.id)}`;
+    const y = g.frame.y + (g.collapsed ? HEADER_TEXT_Y : FRAME_HEADER / 2);
+    text.fillText(label, g.frame.x + PAD, y, g.frame.w - 2 * PAD);
+  }
 }
 
 // --- selection -------------------------------------------------------------------
@@ -449,7 +521,10 @@ function onPointer(kind: 'down' | 'move' | 'up' | 'cancel', sx: number, sy: numb
       if (group.length) store.begin(); // the whole gesture is one undo step
     } else {
       const edge = edgeAt(w.x, w.y);
-      if (edge) {
+      const grp = groupAt(w.x, w.y);
+      if (grp) {
+        drag = { kind: 'pan', sx, sy, group: grp };
+      } else if (edge) {
         if (toggle) toggleIn(selEdges, edge.id);
         else selectOnly([], [edge.id]);
         drag = { kind: 'pan', sx, sy };
@@ -462,6 +537,7 @@ function onPointer(kind: 'down' | 'move' | 'up' | 'cancel', sx: number, sy: numb
     }
   } else if (kind === 'move' && drag) {
     if (drag.kind === 'pan') {
+      drag.moved ||= Math.hypot(sx - drag.sx, sy - drag.sy) > 3;
       cam = { ...cam, x: cam.x + sx - drag.sx, y: cam.y + sy - drag.sy };
       drag.sx = sx;
       drag.sy = sy;
@@ -478,7 +554,9 @@ function onPointer(kind: 'down' | 'move' | 'up' | 'cancel', sx: number, sy: numb
       drag.wy = w.y;
     }
   } else if (kind === 'up' && drag) {
-    if (drag.kind === 'node') {
+    if (drag.kind === 'pan' && drag.group && !drag.moved) {
+      toggleGroup(drag.group);
+    } else if (drag.kind === 'node') {
       if (!endNodeDrag(drag)) {
         // a click: toggle keys add/remove, a plain click narrows the selection to this node
         if (drag.toggle) toggleIn(selNodes, drag.node.id);
@@ -779,7 +857,7 @@ function changed(changes: GraphChanges) {
 }
 
 /** Commands that change the graph; refused in readonly mode. */
-const EDITS = new Set<Command['op']>(['addAfter', 'remove', 'upsertNode', 'moveSelection', 'removeMany', 'paste', 'duplicate', 'connectNodes']);
+const EDITS = new Set<Command['op']>(['addAfter', 'remove', 'upsertNode', 'moveSelection', 'removeMany', 'paste', 'duplicate', 'connectNodes', 'moveNodes']);
 
 function run(command: Command): unknown {
   if (readonly && EDITS.has(command.op)) return;
@@ -810,6 +888,25 @@ function run(command: Command): unknown {
         else statuses.set(u.id, { status: u.status, errors: u.errors ?? [] });
       }
       return schedule();
+    case 'toggleGroup':
+      return toggleGroup(command.id, command.collapsed);
+    case 'expandGroups':
+      [...store.collapsed].forEach((id) => toggleGroup(id, false));
+      return;
+    case 'groupOfFocused':
+      return (focused && store.node(focused)?.group) ?? null;
+    case 'moveNodes':
+      store.begin();
+      for (const p of command.positions) store.move(p.id, p.x, p.y);
+      return commit(true);
+    case 'exportImage': {
+      render(); // a fresh frame, in this task, so the GL buffer still holds it
+      const out = new OffscreenCanvas(glCanvas.width, glCanvas.height);
+      const ctx = out.getContext('2d')!;
+      ctx.drawImage(glCanvas, 0, 0);
+      ctx.drawImage(text.canvas, 0, 0);
+      return out.convertToBlob({ type: command.type });
+    }
     case 'highlight':
       hiNodes = new Set(command.nodes);
       hiEdges = new Set(command.edges);
@@ -941,7 +1038,9 @@ addEventListener('message', (e: MessageEvent<ToWorker>) => {
       break;
     case 'command':
       try {
-        reply(m.reqId, run(m.command));
+        const value = run(m.command);
+        if (value instanceof Promise) value.then((v) => reply(m.reqId, v), (err) => fail(m.reqId, err));
+        else reply(m.reqId, value);
       } catch (err) {
         fail(m.reqId, err);
       }
@@ -952,6 +1051,10 @@ addEventListener('message', (e: MessageEvent<ToWorker>) => {
     case 'mode':
       ({ readonly, canConnect, minimap: minimapOn, reducedMotion } = m);
       if (readonly && drag?.kind === 'link') onPointer('cancel', 0, 0);
+      break;
+    case 'groups':
+      groupInfo = new Map(m.groups.map((g) => [g.id, g]));
+      store.collapsed = new Set(m.groups.filter((g) => g.collapsed).map((g) => g.id));
       break;
     case 'theme':
       theme = m.theme;

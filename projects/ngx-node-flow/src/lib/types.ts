@@ -25,8 +25,17 @@ export interface FlowNode {
   locked?: boolean;
   /** Image URL (or data: URL) drawn before the label. Cross-origin images need CORS. */
   icon?: string;
+  /** Id of the group (frame) this node belongs to; see the `groups` input. */
+  group?: string;
   /** Free-form app data, edited by the consumer's editor template. */
   data?: Record<string, unknown>;
+}
+
+/** A frame drawn around the nodes whose `group` is this id; collapsed, it is drawn as one node. */
+export interface FlowGroup {
+  id: string;
+  label: string;
+  collapsed?: boolean;
 }
 
 /** The whole graph as plain arrays, as returned by `snapshot()`. */
@@ -129,6 +138,9 @@ export interface NodeFlowLabels {
   statusError: string;
   /** Accessible name of the error list in the node menu. */
   errors: string;
+  /** Announced after a group's name when it is collapsed / expanded. */
+  groupCollapsed: string;
+  groupExpanded: string;
 }
 
 /** What `createNode` returns; the library assigns id and position. */
@@ -160,6 +172,12 @@ export type Command =
   | { op: 'find'; text: string; limit: number }
   | { op: 'setStatus'; updates: NodeStatusUpdate[] }
   | { op: 'highlight'; nodes: string[]; edges: string[] }
+  /** collapsed omitted: toggles. Replies the new state. */
+  | { op: 'toggleGroup'; id: string; collapsed?: boolean }
+  | { op: 'expandGroups' }
+  | { op: 'groupOfFocused' }
+  | { op: 'moveNodes'; positions: { id: string; x: number; y: number }[] }
+  | { op: 'exportImage'; type: string }
   | { op: 'fit'; padding: number }
   | { op: 'center'; id: string }
   | { op: 'zoom'; zoom: number }
@@ -190,6 +208,7 @@ export type ToWorker =
   /** Pans by (panX, panY) CSS px, then zooms by factor `zoom` around (x, y). */
   | { type: 'view'; x: number; y: number; zoom: number; panX: number; panY: number }
   | { type: 'theme'; theme: ResolvedTheme }
+  | { type: 'groups'; groups: FlowGroup[] }
   | { type: 'mode'; readonly: boolean; canConnect: boolean; minimap: boolean; reducedMotion: boolean }
   | { type: 'command'; reqId: number; command: Command }
   | { type: 'stream'; reqId: number; stream: ReadableStream<GraphChunk> };
@@ -207,6 +226,7 @@ export type FromWorker =
   | { type: 'reply'; reqId: number; value?: unknown; error?: string }
   | { type: 'error'; message: string }
   | { type: 'selected'; nodes: string[]; edges: string[] }
+  | { type: 'groupToggled'; id: string; label: string; collapsed: boolean }
   /** Keyboard focus moved (id null = none), for the live region. */
   | { type: 'focus'; id: string | null; label: string; selected: boolean; status: NodeStatus; errors: string[] }
   /** Screen rect (CSS px) of the node the menu attaches to (exactly one node selected); id null = no menu. */

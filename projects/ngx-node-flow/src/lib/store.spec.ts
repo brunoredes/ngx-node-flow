@@ -317,6 +317,39 @@ describe('edge style', () => {
   });
 });
 
+describe('groups', () => {
+  const grouped = () => store([{ ...a(), group: 'g' }, { ...b(), group: 'g' }, c()], [ab, bc]);
+
+  it('tracks members through upsert, regroup and removal', () => {
+    const s = grouped();
+    expect(s.groups()).toEqual(['g']);
+    expect(s.groupSize('g')).toBe(2);
+    s.upsertNode({ ...b(), group: 'h' });
+    expect([s.groupSize('g'), s.groupSize('h')]).toEqual([1, 1]);
+    s.remove('a');
+    expect(s.groups()).toEqual(['h']);
+  });
+
+  it('bounds cover the members and follow moves', () => {
+    const s = grouped();
+    expect(s.groupBounds('g')).toEqual({ x0: 0, y0: 0, x1: 300 + cfg.node.width, y1: nodeHeight(a(), cfg) });
+    s.move('b', 500, 0);
+    expect(s.groupBounds('g')!.x1).toBe(500 + cfg.node.width);
+    expect(s.groupBounds('none')).toBeNull();
+  });
+
+  it('collapsed members are hidden from query and hit, and stay collapsed across reset', () => {
+    const s = grouped();
+    s.collapsed.add('g');
+    expect(s.query(-1e6, -1e6, 1e6, 1e6).map((n) => n.id)).toEqual(['c']);
+    expect(s.hit(10, 10)).toBeNull();
+    expect(s.hidden('a')).toBe(true);
+    expect(s.hidden('c')).toBe(false);
+    s.reset([{ ...a(), group: 'g' }], []);
+    expect(s.hidden('a')).toBe(true);
+  });
+});
+
 describe('applyChanges', () => {
   it('upserts and removes', () => {
     const g = applyChanges([a(), b()], [ab], { upsertNodes: [{ ...a(), x: 9 }], removeNodes: ['b'], upsertEdges: [], removeEdges: ['ab'] });

@@ -41,7 +41,8 @@ export const DEFAULT_NODE_FLOW_CONFIG: NodeFlowConfig = {
     keyboardHelp:
       'Arrow keys move between nodes; Ctrl+arrows move without selecting. Space adds or removes the node from the selection. ' +
       'Shift+arrows move the selection, Enter edits, Delete removes. C, then arrows and Enter, connects two nodes. ' +
-      'Ctrl+Z undoes, Ctrl+Y redoes, Ctrl+A selects all, Ctrl+C, Ctrl+V and Ctrl+D copy, paste and duplicate. Escape clears the selection.',
+      'Ctrl+Z undoes, Ctrl+Y redoes, Ctrl+A selects all, Ctrl+C, Ctrl+V and Ctrl+D copy, paste and duplicate. ' +
+      'G collapses or expands the group of the node, Shift+G expands all groups. Escape clears the selection.',
     selected: 'selected',
     connectFrom: 'Connecting: pick the target node with the arrow keys and press Enter, or Escape to cancel',
     connectTo: 'Connect to',
@@ -51,6 +52,8 @@ export const DEFAULT_NODE_FLOW_CONFIG: NodeFlowConfig = {
     statusSuccess: 'succeeded',
     statusError: 'failed',
     errors: 'Errors',
+    groupCollapsed: 'collapsed',
+    groupExpanded: 'expanded',
   },
 };
 

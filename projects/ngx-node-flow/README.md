@@ -40,6 +40,9 @@ Imperative API (on the component instance, e.g. via `viewChild(NodeFlow)`):
 | `findNodes(text, limit?)` | up to `limit` (20) nodes whose label contains `text`, case-insensitive; a linear scan in the worker (tens of ms at 1M nodes) |
 | `setStatus([{ id, status, errors? }])` | runtime state (`'running' \| 'success' \| 'error'`, `'idle'` clears): a badge on the node (shape and color differ per status), the errors listed under the selected node and announced. Not undone, not in `graphChange` or `snapshot()` |
 | `highlight(nodeIds, edgeIds?)` | emphasizes a path, search results or a trace and dims the rest; `highlight([])` clears |
+| `toggleGroup(id, collapsed?)` | collapses / expands a group; `(groupToggle)` reports it |
+| `moveNodes([{ id, x, y }])` | moves many nodes as one undo step, reported through `graphChange` |
+| `exportImage(type?)` | the current view as a `Blob` (PNG by default); call `fitView()` first for the whole graph |
 | `select(ids)` | selects nodes (`[]` clears); `(selectionChange)` reports `{ nodes, edges }` |
 | `undo()`, `redo()`, `canUndo()`, `canRedo()` | history of the last 100 user actions, kept in the worker; undo/redo report through `graphChange`. Replacing `nodes`/`edges` clears it |
 | `load(source)` | streams a large graph in chunks |
@@ -49,6 +52,19 @@ Edges and nodes, still drawn on the canvas:
 - `FlowEdge` takes `label`, `dashed` and `animated` (dashes flowing source → target; still when the user prefers reduced motion).
 - `provideNodeFlow({ edge: { routing: 'step' } })` routes every edge as `'bezier'` (default), `'step'` or `'straight'`.
 - `FlowNode.icon` is an image URL (relative to the page, or `data:`) drawn before the label. It is fetched by the worker, so cross-origin images need CORS.
+
+Groups: give nodes a `group` id and pass `[groups]="[{ id, label, collapsed? }]"`. Each group is drawn as a frame behind its members; a click on its header collapses it into a single box (edges to its members attach to the box), and a click on the box expands it. From the keyboard, G toggles the focused node's group and Shift+G expands every group. Collapsing is view state: it is not undone and not in `graphChange`; a new `groups` array resets it to the `collapsed` flags.
+
+Automatic layout ships as a secondary entry point, so apps that never use it don't load it:
+
+```ts
+import { layered } from 'ngx-node-flow/layout';
+
+const { nodes, edges } = await flow.snapshot();
+await flow.moveNodes(layered(nodes, edges)); // left-to-right layers; one undo step
+```
+
+`layered()` is a plain O(nodes + edges) function (Kahn layering, one barycenter pass to reduce crossings, cycles broken in input order). For very large graphs, run it in your own worker.
 
 Navigation and layout aids:
 

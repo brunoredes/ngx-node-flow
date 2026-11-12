@@ -23,12 +23,19 @@ export const appConfig: ApplicationConfig = {
         keyboardHelp:
           'Setas movem entre células; Ctrl+setas movem sem selecionar. Espaço inclui ou tira a célula da seleção. ' +
           'Shift+setas movem a seleção, Enter edita, Delete remove. C, depois setas e Enter, liga duas células. ' +
-          'Ctrl+Z desfaz, Ctrl+Y refaz, Ctrl+A seleciona tudo, Ctrl+C, Ctrl+V e Ctrl+D copiam, colam e duplicam. Esc limpa a seleção.',
+          'Ctrl+Z desfaz, Ctrl+Y refaz, Ctrl+A seleciona tudo, Ctrl+C, Ctrl+V e Ctrl+D copiam, colam e duplicam. ' +
+          'G recolhe ou expande o grupo da célula, Shift+G expande todos. Esc limpa a seleção.',
         selected: 'selecionada',
         connectFrom: 'Ligando: escolha a célula de destino com as setas e tecle Enter, ou Esc para cancelar',
         connectTo: 'Ligar a',
         connected: 'Ligada',
         noConnection: 'Não há portas livres compatíveis entre essas células',
+        statusRunning: 'executando',
+        statusSuccess: 'concluída',
+        statusError: 'com erro',
+        errors: 'Erros',
+        groupCollapsed: 'recolhido',
+        groupExpanded: 'expandido',
       },
       // design-system tokens; light-dark() follows the page color-scheme
       theme: {

@@ -22,7 +22,7 @@ import { iterate, toReadableStream } from './stream';
 import { NodeFlowEditor } from './node-flow-editor';
 import { EdgeRejectedError } from './errors';
 import { parseClipboard, toClipboard } from './clipboard';
-import { Command, FlowEdge, FlowNode, FromWorker, GraphChanges, GraphChunk, GraphSnapshot, NewFlowNode, NodeStatusUpdate, NodeFlowTheme, ToWorker } from './types';
+import { Command, FlowEdge, FlowGroup, FlowNode, FromWorker, GraphChanges, GraphChunk, GraphSnapshot, NewFlowNode, NodeStatusUpdate, NodeFlowTheme, ToWorker } from './types';
 import { WORKER_SOURCE } from './worker-source';
 
 type Selection = Extract<FromWorker, { type: 'selection' }> & { id: string };
@@ -188,6 +188,13 @@ export class NodeFlow {
   /** Overview of the whole graph in the bottom-right corner; click or drag in it to move the view. */
   readonly minimap = input(true);
   /**
+   * Frames around nodes whose `group` matches. A click on a frame header (or on a collapsed group) toggles it;
+   * G toggles the focused node's group, Shift+G expands all. A new array resets the collapsed state to its flags.
+   */
+  readonly groups = input<FlowGroup[]>([]);
+  /** A group was collapsed or expanded by the user or toggleGroup(). View state: not in graphChange. */
+  readonly groupToggle = output<{ id: string; collapsed: boolean }>();
+  /**
    * Last word on a connection the user drops, after the declarative rules (edge.compatibility, maxConnections,
    * allowCycles) passed. Return false (or resolve false) to refuse it: edgeRejected fires with reason 'custom'.
    * Runs once per drop, never while dragging.
@@ -257,6 +264,7 @@ export class NodeFlow {
       const worker = this.worker(), nodes = this.nodes(), edges = this.edges();
       worker?.postMessage({ type: 'data', nodes, edges } satisfies ToWorker);
     });
+    effect(() => this.worker()?.postMessage({ type: 'groups', groups: this.groups() } satisfies ToWorker));
     effect(() => this.worker()?.postMessage({ type: 'mode', readonly: this.readonly(), canConnect: !!this.canConnect(), minimap: this.minimap(), reducedMotion: this.reducedMotion() } satisfies ToWorker));
 
     // Browser-only (skipped on SSR): canvases must exist before transferring them.
@@ -334,6 +342,24 @@ export class NodeFlow {
   /** Emphasizes these nodes and edges (a path, search results, a trace) and dims the rest. Empty arrays clear it. */
   highlight(nodes: string[], edges: string[] = []): Promise<void> {
     return this.command({ op: 'highlight', nodes, edges });
+  }
+
+  /** Collapses or expands a group (omit `collapsed` to toggle); resolves the new state. */
+  toggleGroup(id: string, collapsed?: boolean): Promise<boolean> {
+    return this.command({ op: 'toggleGroup', id, collapsed });
+  }
+
+  /**
+   * Moves many nodes at once as one undo step, reported through graphChange.
+   * Pairs with `layered()` from 'ngx-node-flow/layout': `flow.moveNodes(layered(nodes, edges))`.
+   */
+  moveNodes(positions: { id: string; x: number; y: number }[]): Promise<void> {
+    return this.command({ op: 'moveNodes', positions });
+  }
+
+  /** The current view (not the whole graph: fitView() first for that) as an image. */
+  exportImage(type = 'image/png'): Promise<Blob> {
+    return this.command({ op: 'exportImage', type });
   }
 
   findNodes(text: string, limit = 20): Promise<{ id: string; label: string }[]> {
@@ -590,6 +616,10 @@ export class NodeFlow {
       case 'selection':
         this.selection.set(m.id === null ? null : (m as Selection));
         break;
+      case 'groupToggled':
+        this.groupToggle.emit({ id: m.id, collapsed: m.collapsed });
+        this.announcement.set(`${m.label}, ${m.collapsed ? this.l.groupCollapsed : this.l.groupExpanded}`);
+        break;
       case 'selected':
         this.selectedIds = { nodes: m.nodes, edges: m.edges };
         this.selectionChange.emit(this.selectedIds);
@@ -635,6 +665,10 @@ export class NodeFlow {
       void this.command({ op: 'duplicate' });
     } else if (mod) {
       return false; // Ctrl+V and browser shortcuts
+    } else if (k === 'g' && e.shiftKey) {
+      void this.command({ op: 'expandGroups' });
+    } else if (k === 'g') {
+      void this.command<string | null>({ op: 'groupOfFocused' }).then((id) => id !== null && this.toggleGroup(id));
     } else if (e.key === ' ') {
       void this.command({ op: 'toggleFocused' });
     } else if (e.key === 'Enter') {
