@@ -54,6 +54,15 @@ export const DEFAULT_NODE_FLOW_CONFIG: NodeFlowConfig = {
     errors: 'Errors',
     groupCollapsed: 'collapsed',
     groupExpanded: 'expanded',
+    noNode: 'No node',
+    canGo: 'You can go',
+    dirLeft: 'to the left',
+    dirRight: 'to the right',
+    dirUp: 'above',
+    dirDown: 'below',
+    noChildren: 'no children',
+    child: 'child',
+    children: 'children',
   },
 };
 

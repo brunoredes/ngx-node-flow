@@ -2,7 +2,7 @@
 /// Bundled to a string by scripts/build-worker.mjs (see worker-source.ts).
 import { align, Camera, dashes, distToPolyline, MINIMAP, nodeHeight, portPos, Rect, route, Side, toWorld, zoomAt } from './geometry';
 import { GlRenderer, RECT_STRIDE, RGBA } from './gl';
-import { cloneGraph, GraphStore, noChanges } from './store';
+import { cloneGraph, DIRS, GraphStore, noChanges } from './store';
 import { Command, FlowEdge, FlowGroup, FlowNode, FromWorker, GraphChanges, GraphChunk, GraphSnapshot, NodeFlowConfig, NodeStatus, ResolvedTheme, ToWorker } from './types';
 
 const HEADER_TEXT_Y = 12;
@@ -715,11 +715,15 @@ const sameEdge = (a: FlowEdge, b: FlowEdge) =>
 
 // --- keyboard commands ----------------------------------------------------------------
 
-const DIRS = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] } as const;
+const step = (id: string, d: keyof typeof DIRS) => store.step(id, d);
 const centerOf = (n: FlowNode) => ({ x: n.x + cfg.node.width / 2, y: n.y + nodeHeight(n, cfg) / 2 });
 
 /** Nearest node in a direction (scored by distance along it plus twice the sideways offset). */
-function focusNext(dir: keyof typeof DIRS, keep: boolean): string | null {
+/**
+ * Moves keyboard focus. Replies whether it moved and, when it could not, the directions that do lead
+ * somewhere (so a screen reader can say "nothing to the right, you can go down").
+ */
+function focusNext(dir: keyof typeof DIRS, keep: boolean): { id: string | null; moved: boolean; open: (keyof typeof DIRS)[] } {
   const cur = focused ? store.node(focused) : undefined;
   let best: FlowNode | undefined;
   if (!cur) {
@@ -732,18 +736,7 @@ function focusNext(dir: keyof typeof DIRS, keep: boolean): string | null {
     }
     best ??= store.node(store.ids()[0] ?? '');
   } else {
-    const c = centerOf(cur), [ux, uy] = DIRS[dir];
-    for (const r of [1500, 15000]) {
-      let bestScore = Infinity;
-      for (const n of store.query(c.x - r, c.y - r, c.x + r, c.y + r)) {
-        const p = centerOf(n), dx = p.x - c.x, dy = p.y - c.y;
-        const along = dx * ux + dy * uy;
-        if (n.id === cur.id || along <= 1) continue;
-        const score = along + 2 * Math.abs(dx * uy - dy * ux);
-        if (score < bestScore) [best, bestScore] = [n, score];
-      }
-      if (best) break;
-    }
+    best = step(cur.id, dir);
   }
   focusVisible = true;
   if (best) {
@@ -752,7 +745,8 @@ function focusNext(dir: keyof typeof DIRS, keep: boolean): string | null {
     reveal(best);
   }
   schedule();
-  return focused;
+  const open = !best && cur ? (Object.keys(DIRS) as (keyof typeof DIRS)[]).filter((d) => d !== dir && step(cur.id, d)) : [];
+  return { id: focused, moved: !!best, open };
 }
 
 /** Pans to the node if it is not fully on screen. */
@@ -833,7 +827,7 @@ let lastFocus = '';
 function reportFocus() {
   const n = focusVisible && focused ? store.node(focused) : undefined;
   const st = n && statuses.get(n.id);
-  const msg: FromWorker = { type: 'focus', id: n?.id ?? null, label: n?.label ?? '', selected: !!n && selNodes.has(n.id), status: st?.status ?? 'idle', errors: st?.errors ?? [] };
+  const msg: FromWorker = { type: 'focus', id: n?.id ?? null, label: n?.label ?? '', selected: !!n && selNodes.has(n.id), status: st?.status ?? 'idle', errors: st?.errors ?? [], children: n ? store.childCount(n.id) : 0 };
   const key = JSON.stringify(msg);
   if (key !== lastFocus) {
     lastFocus = key;

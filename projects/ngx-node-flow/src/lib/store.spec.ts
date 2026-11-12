@@ -350,6 +350,52 @@ describe('groups', () => {
   });
 });
 
+describe('keyboard navigation helpers', () => {
+  // parent p with children c1 (right, up) and c2 (right, down); only c1 has a child g
+  const tree = () =>
+    store(
+      [
+        { ...a(), id: 'p', x: 0, y: 100 },
+        { ...b(), id: 'c1', x: 300, y: 0 },
+        { ...b(), id: 'c2', x: 300, y: 200 },
+        { ...c(), id: 'g', x: 600, y: 0 },
+      ],
+      [
+        { ...ab, id: 'p-c1', source: 'p', target: 'c1' },
+        { ...ab, id: 'p-c1-again', source: 'p', sourcePort: 'o2', target: 'c1' },
+        { ...ab, id: 'p-c2', source: 'p', target: 'c2' },
+        { ...bc, id: 'c1-g', source: 'c1', target: 'g' },
+      ],
+    );
+
+  it('childCount counts distinct targets', () => {
+    const s = tree();
+    expect([s.childCount('p'), s.childCount('c1'), s.childCount('c2'), s.childCount('g')]).toEqual([2, 1, 0, 0]);
+  });
+
+  it('neighbor finds the nearest node in a direction, undefined at the edge', () => {
+    const s = tree();
+    expect(s.neighbor('c1', 1, 0)?.id).toBe('g');
+    expect(s.neighbor('c1', 0, 1)?.id).toBe('c2');
+    expect(s.neighbor('p', 1, 0)).toBeUndefined(); // children sit diagonally (rows 0 and 200 vs 100): not in p's row
+    expect(s.neighbor('c2', 1, 0)).toBeUndefined(); // last of its row: nothing to the right
+    expect(s.neighbor('p', -1, 0)).toBeUndefined(); // first: nothing to the left
+    expect(s.neighbor('c2', 1, 0, false)?.id).toBe('g'); // diagonal only when asked
+  });
+
+  it('step stays in rows/columns, but isolated nodes are reachable both ways', () => {
+    const s = tree();
+    expect(s.step('c2', 'right')).toBeUndefined(); // c2 has no child; g is in c1's row
+    expect(s.step('c1', 'right')?.id).toBe('g');
+    expect(s.step('c2', 'up')?.id).toBe('c1');
+    // p sits between the children's rows: isolated, so it jumps out and can be reached back
+    expect(s.step('p', 'right')?.id).toBe('c2'); // the closer of the two (p's center is nearer c2's row)
+    expect(s.step('c1', 'left')?.id).toBe('p');
+    expect(s.step('c2', 'left')?.id).toBe('p');
+    expect(s.step('p', 'left')).toBeUndefined();
+  });
+});
+
 describe('applyChanges', () => {
   it('upserts and removes', () => {
     const g = applyChanges([a(), b()], [ab], { upsertNodes: [{ ...a(), x: 9 }], removeNodes: ['b'], upsertEdges: [], removeEdges: ['ab'] });

@@ -36,6 +36,15 @@ export const appConfig: ApplicationConfig = {
         errors: 'Erros',
         groupCollapsed: 'recolhido',
         groupExpanded: 'expandido',
+        noNode: 'Nenhuma célula',
+        canGo: 'Você pode ir',
+        dirLeft: 'à esquerda',
+        dirRight: 'à direita',
+        dirUp: 'acima',
+        dirDown: 'abaixo',
+        noChildren: 'sem filhos',
+        child: 'filho',
+        children: 'filhos',
       },
       // design-system tokens; light-dark() follows the page color-scheme
       theme: {

@@ -71,11 +71,11 @@ Navigation and layout aids:
 - `[minimap]="true"` (default) shows the whole graph in the bottom-right corner, drawn in the worker as a density image (redrawn at most 4 times a second while the graph changes). Click or drag in it to move the view.
 - `provideNodeFlow({ grid: { snap: true } })` drops dragged nodes on grid points. `grid.guides` (on by default) snaps a dragged node to the edges and centers of the nodes on screen and draws the guide line; it wins over grid snapping.
 
-Selection and keyboard: click selects; Shift/Ctrl/Cmd+click toggles; Shift+drag on empty space draws a selection rectangle; dragging a selected node moves the whole selection; clicking an edge selects it. The component is one focusable widget (`role="application"`, described by `labels.keyboardHelp`), and a live region announces the focused node:
+Selection and keyboard: click selects; Shift/Ctrl/Cmd+click toggles; Shift+drag on empty space draws a selection rectangle; dragging a selected node moves the whole selection; clicking an edge selects it. The component is one focusable widget (`role="application"`, described by `labels.keyboardHelp`), and a live region announces the focused node (name, selected, status, errors, number of children), 300 ms after the last arrow key so fast navigation reads only where it stops:
 
 | key | action |
 |---|---|
-| arrows | focus and select the nearest node in that direction (Ctrl/Cmd+arrows: focus only) |
+| arrows | focus and select the nearest node in the same row (left/right) or column (up/down); Ctrl/Cmd+arrows: focus only. At the end of a row or column, the live region says so and lists the directions that do lead somewhere. A node sharing no row or column with others is reached and left diagonally |
 | Space | add/remove the focused node from the selection |
 | Shift+arrows | move the selection by one grid step |
 | Enter | edit the focused node |

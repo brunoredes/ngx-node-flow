@@ -2,6 +2,8 @@ import { hitTest, Hit, nodeHeight } from './geometry';
 import { EdgeRejectReason, FlowEdge, FlowNode, FlowPort, GraphChanges, GraphChunk, GraphSnapshot, NodeFlowConfig } from './types';
 
 const CELL = 1024;
+export const DIRS = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] } as const;
+export type Direction = keyof typeof DIRS;
 const GAP = 80;
 const OFFSET = 2 ** 20; // grid coords shifted positive so (cx, cy) packs into one safe integer key
 
@@ -342,6 +344,58 @@ export class GraphStore {
   /** Calls `fn` with the top-left of every live node, without building node objects. */
   eachPosition(fn: (x: number, y: number) => void) {
     for (let s = 0; s < this.nId.length; s++) if (this.nAlive[s]) fn(this.nx[s], this.ny[s]);
+  }
+
+/** Distinct nodes the node has edges into. */
+  childCount(id: string): number {
+    const s = this.nIdx.get(id);
+    return s === undefined ? 0 : new Set((this.out[s] ?? []).map((e) => this.eDst[e])).size;
+  }
+
+  /**
+   * Nearest visible node from `id` in a direction (unit vector), scored by distance along it plus twice
+   * the sideways offset; searched within 1500, then 15000 world px. Undefined when there is none.
+   * inLine (default): only nodes in the same row (left/right: boxes overlap vertically) or column
+   * (up/down: boxes overlap horizontally), so the last node of a row has nothing to its right.
+   * inLine false: anything on that side.
+   */
+  neighbor(id: string, ux: number, uy: number, inLine = true): FlowNode | undefined {
+    const cur = this.node(id);
+    if (!cur) return undefined;
+    const center = (n: FlowNode) => ({ x: n.x + this.cfg.node.width / 2, y: n.y + nodeHeight(n, this.cfg) / 2 });
+    const c = center(cur);
+    for (const r of [1500, 15000]) {
+      let best: FlowNode | undefined, bestScore = Infinity;
+      for (const n of this.query(c.x - r, c.y - r, c.x + r, c.y + r)) {
+        const p = center(n), dx = p.x - c.x, dy = p.y - c.y;
+        const along = dx * ux + dy * uy;
+        const across = Math.abs(dx * uy - dy * ux);
+        if (n.id === id || along <= 1) continue;
+        const overlap = ux ? (nodeHeight(cur, this.cfg) + nodeHeight(n, this.cfg)) / 2 : this.cfg.node.width;
+        if (inLine && across >= overlap) continue;
+        const score = along + 2 * across;
+        if (score < bestScore) [best, bestScore] = [n, score];
+      }
+      if (best) return best;
+    }
+    return undefined;
+  }
+
+/**
+   * Where an arrow key goes from `id`: the nearest node in the same row/column; else, so no node is ever
+   * unreachable, a diagonal jump when the current node or the one it lands on is isolated (shares no
+   * row or column with any other node).
+   */
+  step(id: string, dir: Direction): FlowNode | undefined {
+    const [ux, uy] = DIRS[dir];
+    const inLine = this.neighbor(id, ux, uy);
+    if (inLine) return inLine;
+    const far = this.neighbor(id, ux, uy, false);
+    return far && (this.isolated(id) || this.isolated(far.id)) ? far : undefined;
+  }
+
+  private isolated(id: string): boolean {
+    return !Object.values(DIRS).some(([ux, uy]) => this.neighbor(id, ux, uy));
   }
 
   hasEdge(id: string): boolean {

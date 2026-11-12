@@ -141,6 +141,17 @@ export interface NodeFlowLabels {
   /** Announced after a group's name when it is collapsed / expanded. */
   groupCollapsed: string;
   groupExpanded: string;
+  /** Arrow key with nothing that way: "{noNode} {dirRight}. {canGo} {dirDown}, {dirLeft}." */
+  noNode: string;
+  canGo: string;
+  dirLeft: string;
+  dirRight: string;
+  dirUp: string;
+  dirDown: string;
+  /** Number of nodes the focused node connects to: "no children", "1 child", "2 children". */
+  noChildren: string;
+  child: string;
+  children: string;
 }
 
 /** What `createNode` returns; the library assigns id and position. */
@@ -228,7 +239,7 @@ export type FromWorker =
   | { type: 'selected'; nodes: string[]; edges: string[] }
   | { type: 'groupToggled'; id: string; label: string; collapsed: boolean }
   /** Keyboard focus moved (id null = none), for the live region. */
-  | { type: 'focus'; id: string | null; label: string; selected: boolean; status: NodeStatus; errors: string[] }
+  | { type: 'focus'; id: string | null; label: string; selected: boolean; status: NodeStatus; errors: string[]; children: number }
   /** Screen rect (CSS px) of the node the menu attaches to (exactly one node selected); id null = no menu. */
   | { type: 'selection'; id: string | null; x: number; y: number; w: number; h: number; locked: boolean; errors: string[] };
 

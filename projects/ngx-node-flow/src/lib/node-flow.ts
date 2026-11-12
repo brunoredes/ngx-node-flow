@@ -230,6 +230,7 @@ export class NodeFlow {
   protected readonly helpId = `nf-help-${this.uid}`;
   /** Live region text: the keyboard-focused node, or the result of a keyboard action. */
   protected readonly announcement = signal('');
+  private announceTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly reducedMotion = signal(false);
   private focusedId: string | null = null;
   private selectedIds = { nodes: [] as string[], edges: [] as string[] };
@@ -302,6 +303,7 @@ export class NodeFlow {
       destroyRef.onDestroy(() => {
         resize.disconnect();
         unwatch();
+        clearTimeout(this.announceTimer);
         motion.removeEventListener('change', onMotion);
         worker.terminate();
         this.pending.forEach((p) => p.reject(new Error('ngx-node-flow destroyed')));
@@ -618,7 +620,7 @@ export class NodeFlow {
         break;
       case 'groupToggled':
         this.groupToggle.emit({ id: m.id, collapsed: m.collapsed });
-        this.announcement.set(`${m.label}, ${m.collapsed ? this.l.groupCollapsed : this.l.groupExpanded}`);
+        this.announce(`${m.label}, ${m.collapsed ? this.l.groupCollapsed : this.l.groupExpanded}`);
         break;
       case 'selected':
         this.selectedIds = { nodes: m.nodes, edges: m.edges };
@@ -629,7 +631,10 @@ export class NodeFlow {
         if (m.id) {
           const status = { idle: '', running: this.l.statusRunning, success: this.l.statusSuccess, error: this.l.statusError }[m.status];
           const parts = [this.connectFrom ? `${this.l.connectTo} ${m.label}` : m.label, m.selected && this.l.selected, status, ...m.errors];
-          this.announcement.set(parts.filter(Boolean).join(', '));
+          const kids = m.children === 0 ? this.l.noChildren : `${m.children} ${m.children === 1 ? this.l.child : this.l.children}`;
+          parts.push(kids);
+          // arrow keys held or tapped fast: only the node where navigation stops is read
+          this.announce(parts.filter(Boolean).join(', '), NAV_DEBOUNCE_MS);
         }
         break;
     }
@@ -652,7 +657,9 @@ export class NodeFlow {
       const step = this.config.grid.size;
       void this.command({ op: 'moveSelection', dx: dx * step, dy: dy * step });
     } else if (dir) {
-      void this.command({ op: 'focusNext', dir, keep: mod || !!this.connectFrom });
+      void this.command<{ id: string | null; moved: boolean; open: Direction[] }>({ op: 'focusNext', dir, keep: mod || !!this.connectFrom }).then(
+        (r) => r.id && !r.moved && this.announceBlocked(dir, r.open),
+      );
     } else if (mod && k === 'a') {
       void this.command({ op: 'selectAll' });
     } else if (mod && (k === 'y' || (k === 'z' && e.shiftKey))) {
@@ -680,29 +687,46 @@ export class NodeFlow {
       if (this.connectFrom) this.connectFrom = null;
       else void this.select([]);
       this.post({ type: 'pointer', kind: 'cancel', x: 0, y: 0, toggle: false });
-      this.announcement.set('');
+      this.announce('');
     } else if (k === 'c' && this.focusedId && edit) {
       this.connectFrom = this.focusedId;
-      this.announcement.set(this.l.connectFrom);
+      this.announce(this.l.connectFrom);
     } else {
       return false;
     }
     return true;
   }
 
+/**
+   * Live region text. It is cleared first and set after `delay`, so repeating the same words is read
+   * again, and a newer call within the delay replaces an older one that was not read yet.
+   */
+  private announce(text: string, delay = 0) {
+    clearTimeout(this.announceTimer);
+    this.announcement.set('');
+    if (text) this.announceTimer = setTimeout(() => this.announcement.set(text), Math.max(delay, 50));
+  }
+
+  /** "No node to the right. You can go below, to the left." */
+  private announceBlocked(dir: Direction, open: Direction[]) {
+    const words: Record<Direction, string> = { left: this.l.dirLeft, right: this.l.dirRight, up: this.l.dirUp, down: this.l.dirDown };
+    const way = open.length ? ` ${this.l.canGo} ${open.map((d) => words[d]).join(', ')}.` : '';
+    this.announce(`${this.l.noNode} ${words[dir]}.${way}`, NAV_DEBOUNCE_MS);
+  }
+
   private settleKeyboardConnect(text: string) {
     if (!this.keyboardConnect) return;
     this.keyboardConnect = false;
-    this.announcement.set(text);
+    this.announce(text);
   }
 
   private async finishConnect() {
     const from = this.connectFrom, to = this.focusedId;
     this.connectFrom = null;
     const found = !!from && !!to && (await this.command<boolean>({ op: 'connectNodes', from, to }));
-    if (!found) this.announcement.set(this.l.noConnection);
+    if (!found) this.announce(this.l.noConnection);
     else if (this.canConnect()) this.keyboardConnect = true; // announced on edgeCreated / edgeRejected
-    else this.announcement.set(this.l.connected);
+    else this.announce(this.l.connected);
   }
 
   /** Removes every selected node and edge; beforeRemove runs per node, and locked nodes stay. */
@@ -737,7 +761,11 @@ export class NodeFlow {
   }
 }
 
-const ARROWS: Partial<Record<string, 'left' | 'right' | 'up' | 'down'>> = {
+type Direction = 'left' | 'right' | 'up' | 'down';
+/** Quiet time after the last arrow key before the focused node is read. */
+const NAV_DEBOUNCE_MS = 300;
+
+const ARROWS: Partial<Record<string, Direction>> = {
   ArrowLeft: 'left',
   ArrowRight: 'right',
   ArrowUp: 'up',
