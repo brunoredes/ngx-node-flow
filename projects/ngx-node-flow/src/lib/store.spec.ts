@@ -2,7 +2,8 @@ import { DEFAULT_NODE_FLOW_CONFIG as cfg } from './config';
 import { applyChanges, GraphStore } from './store';
 import { FlowEdge, FlowNode } from './types';
 
-const a = (): FlowNode => ({ id: 'a', x: 0, y: 0, label: 'A', root: true, outputs: ['o1', 'o2'] });
+const a = (): FlowNode => ({ id: 'a', x: 0, y: 0, label: 'A', outputs: ['o1', 'o2'] });
+const tpl = (): FlowNode => ({ id: 'new', x: 0, y: 0, label: 'New', inputs: ['i'], outputs: ['o'] });
 const b = (): FlowNode => ({ id: 'b', x: 300, y: 0, label: 'B', inputs: ['in'], outputs: ['out'] });
 const c = (): FlowNode => ({ id: 'c', x: 600, y: 0, label: 'C', inputs: ['in'] });
 const ab: FlowEdge = { id: 'ab', source: 'a', sourcePort: 'o1', target: 'b', targetPort: 'in' };
@@ -17,34 +18,39 @@ function store(nodes = [a(), b(), c()], edges = [ab, bc]) {
 describe('GraphStore', () => {
   it('addAfter places the node to the right, connected from the first free output', () => {
     const s = store([a()], [ab]);
-    const ch = s.addAfter('a');
-    expect(ch.node).toMatchObject({ x: cfg.node.width + 80, y: 0 });
-    expect(ch.upsertEdges[0]).toMatchObject({ source: 'a', sourcePort: 'o2', target: ch.node!.id, targetPort: 'in' });
+    const ch = s.addAfter('a', tpl());
+    expect(ch.node).toMatchObject({ id: 'new', label: 'New', x: cfg.node.width + 80, y: 0 });
+    expect(ch.upsertEdges[0]).toMatchObject({ source: 'a', sourcePort: 'o2', target: 'new', targetPort: 'i' });
+  });
+
+  it('addAfter leaves a node without inputs unconnected', () => {
+    expect(store([a()], []).addAfter('a', { ...tpl(), inputs: [] }).upsertEdges).toEqual([]);
   });
 
   it('addAfter moves down while the spot is occupied', () => {
     const s = store([a(), { ...b(), x: cfg.node.width + 80 }], []);
-    expect(s.addAfter('a').node!.y).toBeGreaterThanOrEqual(cfg.node.height);
+    expect(s.addAfter('a', tpl()).node!.y).toBeGreaterThanOrEqual(cfg.node.height);
+  });
+
+  it('addAfter lands in the first free gap below a dense column', () => {
+    const x = cfg.node.width + 80, h = cfg.node.height;
+    const column = Array.from({ length: 50 }, (_, i) => ({ ...c(), id: `k${i}`, x, y: i * (h + 20) }));
+    const n = store([a(), ...column], []).addAfter('a', tpl()).node!;
+    expect(n.y).toBe(50 * (h + 20));
   });
 
   it('remove drops the node and its edges, leaving downstream nodes disconnected', () => {
     const s = store();
     const ch = s.remove('b');
     expect(ch).toMatchObject({ removeNodes: ['b'], removeEdges: ['ab', 'bc'] });
-    expect([...s.nodes.keys()]).toEqual(['a', 'c']);
-    expect(s.edges.size).toBe(0);
-  });
-
-  it('removing the root clears everything', () => {
-    const s = store();
-    expect(s.remove('a').clear).toBe(true);
-    expect(s.nodes.size + s.edges.size).toBe(0);
+    expect(['a', 'b', 'c'].filter((id) => s.node(id))).toEqual(['a', 'c']);
+    expect(s.edgeCount).toBe(0);
   });
 
   it('upsertNode prunes edges whose port disappeared', () => {
     const s = store();
     expect(s.upsertNode({ ...b(), inputs: ['other'] }).removeEdges).toEqual(['ab']);
-    expect([...s.edges.keys()]).toEqual(['bc']);
+    expect(s.edgesOf([s.node('b')!, s.node('c')!]).map((e) => e.id)).toEqual(['bc']);
   });
 
   it('query returns only intersecting nodes, bring-to-front last', () => {
@@ -82,11 +88,36 @@ describe('GraphStore', () => {
   });
 });
 
+describe('GraphStore memory layout', () => {
+  it('interns identical port lists and keeps extras only where set', () => {
+    const s = store([b(), { ...b(), id: 'b2' }, { ...c(), color: 'red', data: { k: 1 } }], []);
+    expect(s.node('b')!.inputs).toBe(s.node('b2')!.inputs);
+    expect(s.node('c')).toEqual({ ...c(), color: 'red', data: { k: 1 } });
+    expect(s.node('b')).toEqual(b());
+  });
+
+  it('reuses freed slots and keeps counts right', () => {
+    const s = store();
+    s.remove('c');
+    s.addChunk({ nodes: [{ ...c(), id: 'd' }] });
+    expect(s.nodeCount).toBe(3);
+    expect(s.edgeCount).toBe(1);
+    expect(s.node('c')).toBeUndefined();
+    expect(s.node('d')?.x).toBe(600);
+  });
+
+  it('counts placeholder endpoints only once the node arrives', () => {
+    const s = new GraphStore(cfg);
+    s.addChunk({ edges: [ab] });
+    expect(s.nodeCount).toBe(0);
+    expect(s.node('a')).toBeUndefined();
+  });
+});
+
 describe('applyChanges', () => {
-  it('upserts, removes and clears', () => {
+  it('upserts and removes', () => {
     const g = applyChanges([a(), b()], [ab], { upsertNodes: [{ ...a(), x: 9 }], removeNodes: ['b'], upsertEdges: [], removeEdges: ['ab'] });
     expect(g.nodes).toEqual([{ ...a(), x: 9 }]);
     expect(g.edges).toEqual([]);
-    expect(applyChanges([a()], [ab], { clear: true, upsertNodes: [c()], removeNodes: [], upsertEdges: [], removeEdges: [] })).toEqual({ nodes: [c()], edges: [] });
   });
 });

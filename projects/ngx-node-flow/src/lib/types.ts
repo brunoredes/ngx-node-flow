@@ -7,8 +7,6 @@ export interface FlowNode {
   outputs?: string[];
   /** A literal CSS color (no var()); falls back to the theme nodeColor. */
   color?: string;
-  /** The start node: removing it clears the whole graph. */
-  root?: boolean;
   /** Free-form app data, edited by the consumer's editor template. */
   data?: Record<string, unknown>;
 }
@@ -48,7 +46,25 @@ export interface NodeFlowConfig {
   edge: { width: number };
   zoom: { min: number; max: number };
   theme: NodeFlowTheme;
+  labels: NodeFlowLabels;
 }
+
+/** UI strings (accessible names, buttons, sheet). Defaults are English. */
+export interface NodeFlowLabels {
+  canvas: string;
+  nodeActions: string;
+  addNode: string;
+  editNode: string;
+  removeNode: string;
+  addFirstNode: string;
+  newNode: string;
+  name: string;
+  discard: string;
+  save: string;
+}
+
+/** What `createNode` returns; the library assigns id and position. */
+export type NewFlowNode = Omit<FlowNode, 'id' | 'x' | 'y'>;
 
 export type NodeFlowOptions = { [K in keyof NodeFlowConfig]?: Partial<NodeFlowConfig[K]> };
 
@@ -58,9 +74,8 @@ export interface GraphChunk {
   edges?: FlowEdge[];
 }
 
-/** What changed in the worker-owned graph. `clear` means everything was removed before the rest applies. */
+/** What changed in the worker-owned graph. */
 export interface GraphChanges {
-  clear?: boolean;
   upsertNodes: FlowNode[];
   removeNodes: string[];
   upsertEdges: FlowEdge[];
@@ -68,7 +83,7 @@ export interface GraphChanges {
 }
 
 export type Command =
-  | { op: 'addAfter'; id: string }
+  | { op: 'addAfter'; id: string; node: FlowNode }
   | { op: 'remove'; id: string }
   | { op: 'upsertNode'; node: FlowNode }
   | { op: 'getNode'; id: string }
@@ -78,8 +93,9 @@ export type ToWorker =
   | { type: 'init'; gl: OffscreenCanvas; text: OffscreenCanvas; config: NodeFlowConfig; theme: ResolvedTheme }
   | { type: 'resize'; width: number; height: number; dpr: number }
   | { type: 'data'; nodes: FlowNode[]; edges: FlowEdge[] }
-  | { type: 'pointer'; kind: 'down' | 'move' | 'up'; x: number; y: number }
-  | { type: 'wheel'; x: number; y: number; deltaY: number }
+  | { type: 'pointer'; kind: 'down' | 'move' | 'up' | 'cancel'; x: number; y: number }
+  /** Pans by (panX, panY) CSS px, then zooms by factor `zoom` around (x, y). */
+  | { type: 'view'; x: number; y: number; zoom: number; panX: number; panY: number }
   | { type: 'theme'; theme: ResolvedTheme }
   | { type: 'command'; reqId: number; command: Command }
   | { type: 'stream'; reqId: number; stream: ReadableStream<GraphChunk> };
@@ -90,5 +106,6 @@ export type FromWorker =
   | { type: 'changes'; changes: GraphChanges }
   | { type: 'stats'; nodes: number; edges: number }
   | { type: 'reply'; reqId: number; value?: unknown; error?: string }
+  | { type: 'error'; message: string }
   /** Screen rect (CSS px) of the selected node; id null = nothing selected. */
   | { type: 'selection'; id: string | null; x: number; y: number; w: number; h: number };

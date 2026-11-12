@@ -18,29 +18,37 @@ export async function* iterate<T>(stream: ReadableStream<T>): AsyncGenerator<T> 
  */
 export function toReadableStream<T>(source: AsyncIterable<T> | ReadableStream<T>, signal?: AbortSignal): ReadableStream<T> {
   const it = (source instanceof ReadableStream ? iterate(source) : source)[Symbol.asyncIterator]();
+  let onAbort = () => {};
+  const detach = () => signal?.removeEventListener('abort', onAbort);
   return new ReadableStream<T>(
     {
       start(controller) {
         signal?.throwIfAborted();
-        signal?.addEventListener(
-          'abort',
-          () => {
-            try {
-              controller.error(signal.reason);
-            } catch {
-              /* already closed */
-            }
-            void it.return?.();
-          },
-          { once: true },
-        );
+        onAbort = () => {
+          try {
+            controller.error(signal!.reason);
+          } catch {
+            /* already closed */
+          }
+          void it.return?.();
+        };
+        signal?.addEventListener('abort', onAbort, { once: true });
       },
       async pull(controller) {
-        const r = await it.next();
-        if (r.done) controller.close();
-        else controller.enqueue(r.value);
+        let r: IteratorResult<T>;
+        try {
+          r = await it.next();
+        } catch (err) {
+          detach();
+          throw err;
+        }
+        if (r.done) {
+          detach();
+          controller.close();
+        } else controller.enqueue(r.value);
       },
       async cancel(reason) {
+        detach();
         await it.return?.(reason);
       },
     },

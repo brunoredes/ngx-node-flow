@@ -24,6 +24,18 @@ export const DEFAULT_NODE_FLOW_CONFIG: NodeFlowConfig = {
   edge: { width: 2 },
   zoom: { min: 0.1, max: 4 },
   theme: DEFAULT_NODE_FLOW_THEME,
+  labels: {
+    canvas: 'Flow editor',
+    nodeActions: 'Node actions',
+    addNode: 'Add node',
+    editNode: 'Edit node',
+    removeNode: 'Remove node',
+    addFirstNode: 'Add first node',
+    newNode: 'New node',
+    name: 'Name',
+    discard: 'Discard',
+    save: 'Save',
+  },
 };
 
 export function mergeConfig(options: NodeFlowOptions): NodeFlowConfig {
@@ -34,6 +46,7 @@ export function mergeConfig(options: NodeFlowOptions): NodeFlowConfig {
     edge: { ...d.edge, ...options.edge },
     zoom: { ...d.zoom, ...options.zoom },
     theme: { ...d.theme, ...options.theme },
+    labels: { ...d.labels, ...options.labels },
   };
 }
 

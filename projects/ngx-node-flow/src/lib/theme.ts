@@ -34,13 +34,22 @@ export function resolveTheme(probe: HTMLElement, keys: (keyof NodeFlowTheme)[]):
 
 /** Calls `onChange` whenever the page's theme may have changed (color scheme, theme classes/attributes). */
 export function watchTheme(host: HTMLElement, onChange: () => void): () => void {
+  // coalesce bursts (e.g. scroll locks toggling body style) into one resolve per frame
+  let queued = 0;
+  const changed = () => {
+    queued ||= requestAnimationFrame(() => {
+      queued = 0;
+      onChange();
+    });
+  };
   const media = matchMedia('(prefers-color-scheme: dark)');
-  media.addEventListener('change', onChange);
-  const observer = new MutationObserver(onChange);
+  media.addEventListener('change', changed);
+  const observer = new MutationObserver(changed);
   const attributeFilter = ['class', 'style', 'data-theme', 'data-mode'];
   for (const el of [document.documentElement, document.body, host]) observer.observe(el, { attributes: true, attributeFilter });
   return () => {
-    media.removeEventListener('change', onChange);
+    media.removeEventListener('change', changed);
     observer.disconnect();
+    cancelAnimationFrame(queued);
   };
 }

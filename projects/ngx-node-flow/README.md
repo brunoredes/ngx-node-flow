@@ -8,12 +8,20 @@ providers: [provideNodeFlow({ grid: { size: 24 } })]
 ```
 
 ```html
-<ngx-node-flow [(nodes)]="nodes" [(edges)]="edges">
+<ngx-node-flow [nodes]="nodes" [edges]="edges" (graphChange)="save($event)">
   <ng-template nodeFlowEditor let-draft>
     <!-- your form; `draft` is a WritableSignal<FlowNode>, applied on Save -->
   </ng-template>
 </ngx-node-flow>
 ```
+
+The worker is the single source of truth. `nodes`/`edges` are the initial graph: edits are never written back to them, and setting a new array replaces the whole graph (including what `load()` streamed in). To keep your own copy, fold each `graphChange` with `applyChanges(nodes, edges, change)`.
+
+Policy is yours, not the library's:
+
+- `[createNode]="() => ({ label: 'Step', inputs: ['in'], outputs: ['out'] })"` builds nodes added from the menu (id and position are assigned for you).
+- `[beforeRemove]="confirmRemove"` runs before a removal; return `false` (or a promise of it) to keep the node.
+- `provideNodeFlow({ labels: { ... } })` sets the UI strings (defaults are English, see `NodeFlowLabels`).
 
 Build with `npm run build:lib` (it bundles the worker first). Pages with a CSP need `worker-src blob:`.
 

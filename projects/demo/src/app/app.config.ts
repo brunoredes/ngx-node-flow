@@ -5,7 +5,19 @@ export const appConfig: ApplicationConfig = {
   providers: [
     provideBrowserGlobalErrorListeners(),
     provideNodeFlow({
-      grid: { size: 24 },
+      grid: { size: 12 },
+      labels: {
+        canvas: 'Editor de fluxo',
+        nodeActions: 'Ações da célula',
+        addNode: 'Adicionar célula',
+        editNode: 'Editar célula',
+        removeNode: 'Remover célula',
+        addFirstNode: 'Adicionar primeira célula',
+        newNode: 'Nova célula',
+        name: 'Nome',
+        discard: 'Descartar',
+        save: 'Salvar',
+      },
       // design-system tokens; light-dark() follows the page color-scheme
       theme: {
         accent: 'var(--demo-accent)',

@@ -4,7 +4,9 @@
   "scripts": {
     "ng": "ng",
     "start": "npm run build:lib && ng serve demo",
+    "prebuild": "npm run build:worker",
     "build": "ng build",
+    "prewatch": "npm run build:worker",
     "watch": "ng build --watch --configuration development",
     "test": "npm run build:worker && ng test ngx-node-flow",
     "build:worker": "node scripts/build-worker.mjs",

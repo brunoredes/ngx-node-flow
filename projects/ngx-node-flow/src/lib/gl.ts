@@ -9,6 +9,7 @@ const COMMON = `#version 300 es
 precision highp float;
 uniform vec2 uRes;
 uniform vec3 uCam;
+uniform float uDpr;
 `;
 const TO_CLIP = `vec4 toClip(vec2 w) {
   vec2 c = (w * uCam.z + uCam.xy) / uRes * 2.0 - 1.0;
@@ -18,7 +19,7 @@ const TO_CLIP = `vec4 toClip(vec2 w) {
 
 const GRID_VS = COMMON + `in vec2 aPos; void main() { gl_Position = vec4(aPos, 0.0, 1.0); }`;
 const GRID_FS = COMMON + `
-uniform float uDpr; uniform float uSize; uniform vec4 uColor;
+uniform float uSize; uniform vec4 uColor;
 out vec4 o;
 void main() {
   vec2 s = vec2(gl_FragCoord.x, uRes.y * uDpr - gl_FragCoord.y) / uDpr;
@@ -44,7 +45,7 @@ out vec4 o;
 void main() {
   vec2 q = abs(vLocal) - vHalf + vR;
   float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - vR;
-  float a = clamp(0.5 - d * uCam.z, 0.0, 1.0) * vColor.a;
+  float a = clamp(0.5 - d * uCam.z * uDpr, 0.0, 1.0) * vColor.a; // ~1 device px of AA
   o = vec4(vColor.rgb * a, a);
 }`;
 
@@ -131,11 +132,20 @@ export class GlRenderer {
     return buf;
   }
 
+  private readonly locs = new Map<string, WebGLUniformLocation | null>();
+  /** Cached uniform location; programs are fixed for the renderer's lifetime. */
+  private u(p: WebGLProgram, name: string): WebGLUniformLocation | null {
+    const key = (p === this.grid ? 'g' : p === this.rect ? 'r' : 'l') + name;
+    if (!this.locs.has(key)) this.locs.set(key, this.gl.getUniformLocation(p, name));
+    return this.locs.get(key)!;
+  }
+
   private use(p: WebGLProgram, f: Frame) {
     const gl = this.gl;
     gl.useProgram(p);
-    gl.uniform2f(gl.getUniformLocation(p, 'uRes'), f.width, f.height);
-    gl.uniform3f(gl.getUniformLocation(p, 'uCam'), f.cam.x, f.cam.y, f.cam.zoom);
+    gl.uniform2f(this.u(p, 'uRes'), f.width, f.height);
+    gl.uniform3f(this.u(p, 'uCam'), f.cam.x, f.cam.y, f.cam.zoom);
+    gl.uniform1f(this.u(p, 'uDpr'), f.dpr);
   }
 
   draw(f: Frame) {
@@ -147,16 +157,15 @@ export class GlRenderer {
 
     if (f.grid) {
       this.use(this.grid, f);
-      gl.uniform1f(gl.getUniformLocation(this.grid, 'uDpr'), f.dpr);
-      gl.uniform1f(gl.getUniformLocation(this.grid, 'uSize'), f.grid.size);
-      gl.uniform4fv(gl.getUniformLocation(this.grid, 'uColor'), f.grid.color);
+      gl.uniform1f(this.u(this.grid, 'uSize'), f.grid.size);
+      gl.uniform4fv(this.u(this.grid, 'uColor'), f.grid.color);
       gl.bindVertexArray(this.gridVao);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
 
     if (f.lineCount) {
       this.use(this.line, f);
-      gl.uniform4fv(gl.getUniformLocation(this.line, 'uColor'), f.lineColor);
+      gl.uniform4fv(this.u(this.line, 'uColor'), f.lineColor);
       gl.bindVertexArray(this.lineVao);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.lineBuf);
       gl.bufferData(gl.ARRAY_BUFFER, f.lines.subarray(0, f.lineCount * 2), gl.DYNAMIC_DRAW);
