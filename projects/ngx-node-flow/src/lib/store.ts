@@ -9,6 +9,7 @@ export const noChanges = (): GraphChanges => ({ upsertNodes: [], removeNodes: []
 
 type Ports = Pick<FlowNode, 'inputs' | 'outputs'>;
 type Extra = Omit<FlowNode, 'id' | 'x' | 'y' | 'label' | 'inputs' | 'outputs'>;
+type EdgeExtra = Omit<FlowEdge, 'id' | 'source' | 'sourcePort' | 'target' | 'targetPort'>;
 
 function grow<T extends Float64Array | Uint32Array | Uint8Array>(a: T, size: number): T {
   if (size <= a.length) return a;
@@ -33,6 +34,8 @@ export class GraphStore {
   private nAlive = new Uint8Array(1024);
   private nSeen = new Uint32Array(1024);
   private nExtra = new Map<number, Extra>();
+  /** Edge label/style, only for edges that have any (most do not). */
+  private eExtra = new Map<number, EdgeExtra>();
   // directed adjacency (edge slots): traversals follow `out` without filtering by direction
   private out: (number[] | undefined)[] = [];
   private inn: (number[] | undefined)[] = [];
@@ -176,6 +179,8 @@ export class GraphStore {
     this.eSp[s] = this.str(e.sourcePort);
     this.eTp[s] = this.str(e.targetPort);
     this.eIdx.set(e.id, s);
+    const { id, source, sourcePort, target, targetPort, ...extra } = e;
+    if (Object.keys(extra).length) this.eExtra.set(s, extra);
     (this.out[src] ??= []).push(s);
     (this.inn[dst] ??= []).push(s);
     this.liveEdges++;
@@ -188,7 +193,9 @@ export class GraphStore {
   }
 
   private matEdge(s: number): FlowEdge {
-    return { id: this.eId[s], source: this.nId[this.eSrc[s]], sourcePort: this.strs[this.eSp[s]], target: this.nId[this.eDst[s]], targetPort: this.strs[this.eTp[s]] };
+    const e: FlowEdge = { id: this.eId[s], source: this.nId[this.eSrc[s]], sourcePort: this.strs[this.eSp[s]], target: this.nId[this.eDst[s]], targetPort: this.strs[this.eTp[s]] };
+    const extra = this.eExtra.get(s);
+    return extra ? Object.assign(e, extra) : e;
   }
 
   private deleteEdgeSlot(s: number) {
@@ -198,6 +205,7 @@ export class GraphStore {
       if (i >= 0) list!.splice(i, 1);
     }
     this.eIdx.delete(this.eId[s]);
+    this.eExtra.delete(s);
     this.eFree.push(s);
     this.liveEdges--;
   }

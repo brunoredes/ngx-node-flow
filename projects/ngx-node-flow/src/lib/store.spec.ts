@@ -305,6 +305,18 @@ describe('find', () => {
   });
 });
 
+describe('edge style', () => {
+  it('keeps label/dashed/animated through storage, replacement and removal', () => {
+    const styled = { ...ab, label: 'yes', dashed: true, animated: true };
+    const s = store([a(), b(), c()], [styled, bc]);
+    expect(s.snapshot().edges).toContainEqual(styled);
+    expect(s.snapshot().edges).toContainEqual(bc);
+    s.disconnect('ab');
+    s.connect({ ...ab, id: 'ab2' }); // may reuse the freed slot: must not inherit the old style
+    expect(s.snapshot().edges).toContainEqual({ ...ab, id: 'ab2' });
+  });
+});
+
 describe('applyChanges', () => {
   it('upserts and removes', () => {
     const g = applyChanges([a(), b()], [ab], { upsertNodes: [{ ...a(), x: 9 }], removeNodes: ['b'], upsertEdges: [], removeEdges: ['ab'] });

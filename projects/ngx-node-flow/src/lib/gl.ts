@@ -76,11 +76,8 @@ export interface Frame {
   rects: Float32Array;
   rectCount: number;
   lines: Float32Array;
-  lineCount: number;
-  lineColor: RGBA;
-  /** Line vertices from this index on are drawn in accentColor (selected edges). */
-  accentFrom: number;
-  accentColor: RGBA;
+  /** Consecutive runs of line vertices, each in one color (e.g. dimmed, normal, selected). */
+  lineBatches: { count: number; color: RGBA }[];
 }
 
 export class GlRenderer {
@@ -166,15 +163,19 @@ export class GlRenderer {
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
 
-    if (f.lineCount) {
+    const lineCount = f.lineBatches.reduce((n, b) => n + b.count, 0);
+    if (lineCount) {
       this.use(this.line, f);
       gl.bindVertexArray(this.lineVao);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.lineBuf);
-      gl.bufferData(gl.ARRAY_BUFFER, f.lines.subarray(0, f.lineCount * 2), gl.DYNAMIC_DRAW);
-      gl.uniform4fv(this.u(this.line, 'uColor'), f.lineColor);
-      if (f.accentFrom) gl.drawArrays(gl.TRIANGLES, 0, f.accentFrom);
-      gl.uniform4fv(this.u(this.line, 'uColor'), f.accentColor);
-      if (f.lineCount > f.accentFrom) gl.drawArrays(gl.TRIANGLES, f.accentFrom, f.lineCount - f.accentFrom);
+      gl.bufferData(gl.ARRAY_BUFFER, f.lines.subarray(0, lineCount * 2), gl.DYNAMIC_DRAW);
+      let first = 0;
+      for (const b of f.lineBatches) {
+        if (!b.count) continue;
+        gl.uniform4fv(this.u(this.line, 'uColor'), b.color);
+        gl.drawArrays(gl.TRIANGLES, first, b.count);
+        first += b.count;
+      }
     }
 
     if (f.rectCount) {

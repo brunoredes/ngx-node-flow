@@ -1,3 +1,5 @@
+import type { EdgeRouting } from './geometry';
+
 /** A connection point. Edges reference it by `id`, so `label` can change without dropping edges. */
 export interface FlowPort {
   id: string;
@@ -21,6 +23,8 @@ export interface FlowNode {
   color?: string;
   /** Locked nodes cannot be dragged or removed by the user. */
   locked?: boolean;
+  /** Image URL (or data: URL) drawn before the label. Cross-origin images need CORS. */
+  icon?: string;
   /** Free-form app data, edited by the consumer's editor template. */
   data?: Record<string, unknown>;
 }
@@ -37,6 +41,21 @@ export interface FlowEdge {
   sourcePort: string;
   target: string;
   targetPort: string;
+  /** Text drawn at the middle of the edge. */
+  label?: string;
+  dashed?: boolean;
+  /** Dashes flowing from source to target (static when the user prefers reduced motion). */
+  animated?: boolean;
+}
+
+/** Runtime state of a node (e.g. while a flow executes). Not part of the graph: not undone, not in graphChange. */
+export type NodeStatus = 'idle' | 'running' | 'success' | 'error';
+
+export interface NodeStatusUpdate {
+  id: string;
+  status: NodeStatus;
+  /** Validation or run errors, listed in the node menu and announced to screen readers. */
+  errors?: string[];
 }
 
 /** Visual tokens. Values are any CSS: literals, var(--your-ds-token), light-dark(), color-mix(). */
@@ -53,6 +72,9 @@ export interface NodeFlowTheme {
   border: string;
   accent: string;
   accentText: string;
+  statusRunning: string;
+  statusSuccess: string;
+  statusError: string;
   fontFamily: string;
   radius: string;
 }
@@ -73,7 +95,7 @@ export interface NodeFlowConfig {
    * - compatibility: output port type -> input port types it may connect to. A port without a type,
    *   or a type missing from the map, connects to anything. Omit the map to allow every pair.
    */
-  edge: { width: number; allowCycles: boolean; compatibility?: Record<string, string[]> };
+  edge: { width: number; allowCycles: boolean; compatibility?: Record<string, string[]>; routing: EdgeRouting };
   zoom: { min: number; max: number };
   theme: NodeFlowTheme;
   labels: NodeFlowLabels;
@@ -101,6 +123,12 @@ export interface NodeFlowLabels {
   connectTo: string;
   connected: string;
   noConnection: string;
+  /** Announced after the node name for each status (idle says nothing). */
+  statusRunning: string;
+  statusSuccess: string;
+  statusError: string;
+  /** Accessible name of the error list in the node menu. */
+  errors: string;
 }
 
 /** What `createNode` returns; the library assigns id and position. */
@@ -130,6 +158,8 @@ export type Command =
   | { op: 'chunk'; chunk: GraphChunk }
   | { op: 'snapshot' }
   | { op: 'find'; text: string; limit: number }
+  | { op: 'setStatus'; updates: NodeStatusUpdate[] }
+  | { op: 'highlight'; nodes: string[]; edges: string[] }
   | { op: 'fit'; padding: number }
   | { op: 'center'; id: string }
   | { op: 'zoom'; zoom: number }
@@ -150,7 +180,7 @@ export type Command =
   | { op: 'redo' };
 
 export type ToWorker =
-  | { type: 'init'; gl: OffscreenCanvas; text: OffscreenCanvas; mini: OffscreenCanvas; config: NodeFlowConfig; theme: ResolvedTheme }
+  | { type: 'init'; gl: OffscreenCanvas; text: OffscreenCanvas; mini: OffscreenCanvas; config: NodeFlowConfig; theme: ResolvedTheme; baseURI: string }
   /** Pointer on the minimap (CSS px inside it): centers the view there. */
   | { type: 'minimap'; x: number; y: number }
   | { type: 'resize'; width: number; height: number; dpr: number }
@@ -160,7 +190,7 @@ export type ToWorker =
   /** Pans by (panX, panY) CSS px, then zooms by factor `zoom` around (x, y). */
   | { type: 'view'; x: number; y: number; zoom: number; panX: number; panY: number }
   | { type: 'theme'; theme: ResolvedTheme }
-  | { type: 'mode'; readonly: boolean; canConnect: boolean; minimap: boolean }
+  | { type: 'mode'; readonly: boolean; canConnect: boolean; minimap: boolean; reducedMotion: boolean }
   | { type: 'command'; reqId: number; command: Command }
   | { type: 'stream'; reqId: number; stream: ReadableStream<GraphChunk> };
 
@@ -178,9 +208,9 @@ export type FromWorker =
   | { type: 'error'; message: string }
   | { type: 'selected'; nodes: string[]; edges: string[] }
   /** Keyboard focus moved (id null = none), for the live region. */
-  | { type: 'focus'; id: string | null; label: string; selected: boolean }
+  | { type: 'focus'; id: string | null; label: string; selected: boolean; status: NodeStatus; errors: string[] }
   /** Screen rect (CSS px) of the node the menu attaches to (exactly one node selected); id null = no menu. */
-  | { type: 'selection'; id: string | null; x: number; y: number; w: number; h: number; locked: boolean };
+  | { type: 'selection'; id: string | null; x: number; y: number; w: number; h: number; locked: boolean; errors: string[] };
 
 /**
  * Why a connection made by the user was refused: `cycle` (edge.allowCycles), `type` (edge.compatibility),

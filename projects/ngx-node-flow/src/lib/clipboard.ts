@@ -8,6 +8,7 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object
 const isStr = (v: unknown): v is string => typeof v === 'string';
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 const opt = (v: unknown, test: (v: unknown) => boolean) => v === undefined || test(v);
+const isBool = (v: unknown) => typeof v === 'boolean';
 
 const isPort = (p: unknown): p is FlowPort =>
   isObj(p) && isStr(p['id']) && opt(p['label'], isStr) && opt(p['type'], isStr) && opt(p['maxConnections'], isNum);
@@ -15,11 +16,12 @@ const isPorts = (v: unknown) => v === undefined || (Array.isArray(v) && v.every(
 
 const isNode = (n: unknown): n is FlowNode =>
   isObj(n) && isStr(n['id']) && isNum(n['x']) && isNum(n['y']) && isStr(n['label']) &&
-  isPorts(n['inputs']) && isPorts(n['outputs']) && opt(n['color'], isStr) && opt(n['locked'], (v) => typeof v === 'boolean') &&
+  isPorts(n['inputs']) && isPorts(n['outputs']) && opt(n['color'], isStr) && opt(n['locked'], isBool) && opt(n['icon'], isStr) &&
   opt(n['data'], isObj);
 
 const isEdge = (e: unknown): e is FlowEdge =>
-  isObj(e) && ['id', 'source', 'sourcePort', 'target', 'targetPort'].every((k) => isStr(e[k]));
+  isObj(e) && ['id', 'source', 'sourcePort', 'target', 'targetPort'].every((k) => isStr(e[k])) &&
+  opt(e['label'], isStr) && opt(e['dashed'], isBool) && opt(e['animated'], isBool);
 
 /**
  * Reads what `toClipboard` wrote. Clipboard text comes from anywhere, so anything that is not

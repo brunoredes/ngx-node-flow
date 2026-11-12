@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { DEFAULT_NODE_FLOW_CONFIG as cfg, NODE_FLOW_CONFIG, provideNodeFlow } from './config';
-import { align, bezier, distToPolyline, hitTest, portPos, toWorld, zoomAt } from './geometry';
+import { align, bezier, dashes, distToPolyline, hitTest, portPos, route, toWorld, zoomAt } from './geometry';
 import { FlowNode } from './types';
 
 describe('provideNodeFlow', () => {
@@ -72,5 +72,27 @@ describe('align', () => {
 
   it('ignores anything farther than the tolerance', () => {
     expect(align({ x: 120, y: 200, w: 160, h: 60 }, [o], 6)).toEqual({ dx: 0, dy: 0, vx: undefined, hy: undefined });
+  });
+});
+
+describe('route', () => {
+  it('draws straight, step and bezier polylines between the ports', () => {
+    expect(route(0, 0, 100, 50, 'straight')).toEqual([0, 0, 100, 50]);
+    expect(route(0, 0, 100, 50, 'step')).toEqual([0, 0, 50, 0, 50, 50, 100, 50]);
+    expect(route(0, 0, 100, 50, 'bezier', 8)).toEqual(bezier(0, 0, 100, 50, 8));
+  });
+});
+
+describe('dashes', () => {
+  it('cuts a line into on/off pieces', () => {
+    expect(dashes([0, 0, 25, 0], 5, 5)).toEqual([[0, 0, 5, 0], [10, 0, 15, 0], [20, 0, 25, 0]]);
+  });
+
+  it('carries dashes across polyline corners', () => {
+    expect(dashes([0, 0, 3, 0, 3, 4], 5, 100)).toEqual([[0, 0, 3, 0, 3, 2]]);
+  });
+
+  it('starts mid-pattern with a phase', () => {
+    expect(dashes([0, 0, 10, 0], 5, 5, 7)).toEqual([[3, 0, 8, 0]]);
   });
 });

@@ -14,6 +14,9 @@ export const DEFAULT_NODE_FLOW_THEME: NodeFlowTheme = {
   border: '#ffffff33',
   accent: '#63b3ed',
   accentText: '#1a202c',
+  statusRunning: '#63b3ed',
+  statusSuccess: '#48bb78',
+  statusError: '#f56565',
   fontFamily: 'system-ui, sans-serif',
   radius: '8px',
 };
@@ -21,7 +24,7 @@ export const DEFAULT_NODE_FLOW_THEME: NodeFlowTheme = {
 export const DEFAULT_NODE_FLOW_CONFIG: NodeFlowConfig = {
   grid: { size: 20, visible: true, snap: false, guides: true },
   node: { width: 160, height: 60, radius: 8, portRadius: 6, fontSize: 13 },
-  edge: { width: 2, allowCycles: true },
+  edge: { width: 2, allowCycles: true, routing: 'bezier' },
   zoom: { min: 0.1, max: 4 },
   theme: DEFAULT_NODE_FLOW_THEME,
   labels: {
@@ -44,6 +47,10 @@ export const DEFAULT_NODE_FLOW_CONFIG: NodeFlowConfig = {
     connectTo: 'Connect to',
     connected: 'Connected',
     noConnection: 'No compatible free ports between these nodes',
+    statusRunning: 'running',
+    statusSuccess: 'succeeded',
+    statusError: 'failed',
+    errors: 'Errors',
   },
 };
 

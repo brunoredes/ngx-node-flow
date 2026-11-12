@@ -103,3 +103,46 @@ export function align(r: Rect, others: Iterable<Rect>, tol: number): { dx: numbe
 
 /** Minimap size in CSS px (bottom-right corner). */
 export const MINIMAP = { w: 200, h: 140 };
+
+export type EdgeRouting = 'bezier' | 'step' | 'straight';
+
+/** Polyline from an output port (a) to an input port (b) for the routing style. */
+export function route(ax: number, ay: number, bx: number, by: number, routing: EdgeRouting, segments = 24): number[] {
+  if (routing === 'straight') return [ax, ay, bx, by];
+  if (routing === 'step') {
+    const mx = (ax + bx) / 2;
+    return [ax, ay, mx, ay, mx, by, bx, by];
+  }
+  return bezier(ax, ay, bx, by, segments);
+}
+
+/**
+ * Cuts a polyline into dashes `on` long with `off` gaps (world units), starting `phase` into the pattern.
+ * Returns one polyline per dash.
+ */
+export function dashes(pts: number[], on: number, off: number, phase = 0): number[][] {
+  const out: number[][] = [];
+  const period = on + off;
+  let d = ((phase % period) + period) % period; // position in the pattern
+  let cur: number[] | null = d < on ? [pts[0], pts[1]] : null;
+  for (let i = 0; i + 3 < pts.length; i += 2) {
+    const ax = pts[i], ay = pts[i + 1], bx = pts[i + 2], by = pts[i + 3];
+    const len = Math.hypot(bx - ax, by - ay);
+    let t = 0;
+    while (t < len) {
+      const left = d < on ? on - d : period - d; // distance to the next pattern switch
+      const step = Math.min(left, len - t);
+      t += step;
+      d += step;
+      const x = ax + ((bx - ax) * t) / len, y = ay + ((by - ay) * t) / len;
+      if (cur) cur.push(x, y);
+      if (step === left) {
+        if (cur) out.push(cur);
+        if (d >= period) d -= period;
+        cur = d < on ? [x, y] : null;
+      }
+    }
+  }
+  if (cur && cur.length >= 4) out.push(cur);
+  return out;
+}

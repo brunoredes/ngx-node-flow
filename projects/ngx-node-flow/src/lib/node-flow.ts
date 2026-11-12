@@ -22,7 +22,7 @@ import { iterate, toReadableStream } from './stream';
 import { NodeFlowEditor } from './node-flow-editor';
 import { EdgeRejectedError } from './errors';
 import { parseClipboard, toClipboard } from './clipboard';
-import { Command, FlowEdge, FlowNode, FromWorker, GraphChanges, GraphChunk, GraphSnapshot, NewFlowNode, NodeFlowTheme, ToWorker } from './types';
+import { Command, FlowEdge, FlowNode, FromWorker, GraphChanges, GraphChunk, GraphSnapshot, NewFlowNode, NodeStatusUpdate, NodeFlowTheme, ToWorker } from './types';
 import { WORKER_SOURCE } from './worker-source';
 
 type Selection = Extract<FromWorker, { type: 'selection' }> & { id: string };
@@ -47,6 +47,20 @@ type Selection = Extract<FromWorker, { type: 'selection' }> & { id: string };
       (pointermove)="$event.buttons && minimapPointer($event)"
       (wheel)="$event.stopPropagation()"
     ></canvas>
+
+    @if (!draft() && selection()?.errors?.length) {
+      <ul
+        class="nf-overlay nf-errors"
+        [attr.aria-label]="l.errors"
+        [style.left.px]="selection()!.x"
+        [style.top.px]="selection()!.y + selection()!.h + 8"
+        (pointerdown)="$event.stopPropagation()"
+      >
+        @for (e of selection()!.errors; track $index) {
+          <li>{{ e }}</li>
+        }
+      </ul>
+    }
 
     @if (!draft() && !readonly() && selection(); as s) {
       <div
@@ -126,6 +140,7 @@ type Selection = Extract<FromWorker, { type: 'selection' }> & { id: string };
     button:focus-visible { outline: 2px solid var(--__nf-accent); outline-offset: 1px; }
     .nf-menu { display: flex; gap: 2px; padding: 4px; border-radius: var(--__nf-radius); transform: translate(-50%, calc(-100% - 8px)); box-shadow: 0 4px 12px #0006; }
     .nf-menu button { width: 32px; height: 32px; display: grid; place-items: center; border: 0; background: transparent; }
+    .nf-errors { margin: 0; padding: 6px 10px 6px 24px; max-width: 280px; border-left: 3px solid var(--__nf-status-error); border-radius: calc(var(--__nf-radius) / 2); box-shadow: 0 4px 12px #0006; font-size: 13px; user-select: text; }
     .nf-menu button:hover { background: color-mix(in srgb, var(--__nf-text) 12%, transparent); }
     .nf-menu svg, .nf-empty svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
     .nf-sheet { top: 0; right: 0; bottom: 0; width: min(360px, 100%); display: flex; flex-direction: column; box-shadow: -4px 0 16px #0006; user-select: text; }
@@ -208,6 +223,7 @@ export class NodeFlow {
   protected readonly helpId = `nf-help-${this.uid}`;
   /** Live region text: the keyboard-focused node, or the result of a keyboard action. */
   protected readonly announcement = signal('');
+  private readonly reducedMotion = signal(false);
   private focusedId: string | null = null;
   private selectedIds = { nodes: [] as string[], edges: [] as string[] };
   /** Keyboard connect mode: the node the new edge starts from. */
@@ -241,7 +257,7 @@ export class NodeFlow {
       const worker = this.worker(), nodes = this.nodes(), edges = this.edges();
       worker?.postMessage({ type: 'data', nodes, edges } satisfies ToWorker);
     });
-    effect(() => this.worker()?.postMessage({ type: 'mode', readonly: this.readonly(), canConnect: !!this.canConnect(), minimap: this.minimap() } satisfies ToWorker));
+    effect(() => this.worker()?.postMessage({ type: 'mode', readonly: this.readonly(), canConnect: !!this.canConnect(), minimap: this.minimap(), reducedMotion: this.reducedMotion() } satisfies ToWorker));
 
     // Browser-only (skipped on SSR): canvases must exist before transferring them.
     afterNextRender(() => {
@@ -256,7 +272,11 @@ export class NodeFlow {
       const resolve = () => resolveTheme(this.probe().nativeElement, Object.keys(this.config.theme) as (keyof NodeFlowTheme)[]);
       let theme = resolve();
       const mini = this.miniCanvas().nativeElement.transferControlToOffscreen();
-      worker.postMessage({ type: 'init', gl, text, mini, config: this.config, theme } satisfies ToWorker, [gl, text, mini]);
+      worker.postMessage({ type: 'init', gl, text, mini, config: this.config, theme, baseURI: document.baseURI } satisfies ToWorker, [gl, text, mini]);
+      const motion = matchMedia('(prefers-reduced-motion: reduce)');
+      const onMotion = () => this.reducedMotion.set(motion.matches);
+      onMotion();
+      motion.addEventListener('change', onMotion);
       const unwatch = watchTheme(this.host, () => {
         const next = resolve();
         if (JSON.stringify(next) === JSON.stringify(theme)) return;
@@ -274,6 +294,7 @@ export class NodeFlow {
       destroyRef.onDestroy(() => {
         resize.disconnect();
         unwatch();
+        motion.removeEventListener('change', onMotion);
         worker.terminate();
         this.pending.forEach((p) => p.reject(new Error('ngx-node-flow destroyed')));
       });
@@ -302,6 +323,19 @@ export class NodeFlow {
 
   /** The whole graph as the worker holds it now: the way to persist without folding every graphChange. */
   /** Up to `limit` nodes whose label contains `text` (case-insensitive). Pair with centerOn() and select(). */
+  /**
+   * Shows runtime state on nodes (a badge, plus errors in the node menu and in announcements).
+   * Not part of the graph: not undone, not in graphChange or snapshot(). 'idle' clears a node.
+   */
+  setStatus(updates: NodeStatusUpdate[]): Promise<void> {
+    return this.command({ op: 'setStatus', updates });
+  }
+
+  /** Emphasizes these nodes and edges (a path, search results, a trace) and dims the rest. Empty arrays clear it. */
+  highlight(nodes: string[], edges: string[] = []): Promise<void> {
+    return this.command({ op: 'highlight', nodes, edges });
+  }
+
   findNodes(text: string, limit = 20): Promise<{ id: string; label: string }[]> {
     return this.command({ op: 'find', text, limit });
   }
@@ -562,7 +596,11 @@ export class NodeFlow {
         break;
       case 'focus':
         this.focusedId = m.id;
-        if (m.id) this.announcement.set(this.connectFrom ? `${this.l.connectTo} ${m.label}` : m.selected ? `${m.label}, ${this.l.selected}` : m.label);
+        if (m.id) {
+          const status = { idle: '', running: this.l.statusRunning, success: this.l.statusSuccess, error: this.l.statusError }[m.status];
+          const parts = [this.connectFrom ? `${this.l.connectTo} ${m.label}` : m.label, m.selected && this.l.selected, status, ...m.errors];
+          this.announcement.set(parts.filter(Boolean).join(', '));
+        }
         break;
     }
   }

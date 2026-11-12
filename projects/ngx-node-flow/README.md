@@ -38,9 +38,17 @@ Imperative API (on the component instance, e.g. via `viewChild(NodeFlow)`):
 | `snapshot()` | resolves the whole graph as `{ nodes, edges }`: persist without folding every `graphChange` |
 | `fitView({ padding? })`, `centerOn(id)`, `zoomTo(zoom)` | moves the camera |
 | `findNodes(text, limit?)` | up to `limit` (20) nodes whose label contains `text`, case-insensitive; a linear scan in the worker (tens of ms at 1M nodes) |
+| `setStatus([{ id, status, errors? }])` | runtime state (`'running' \| 'success' \| 'error'`, `'idle'` clears): a badge on the node (shape and color differ per status), the errors listed under the selected node and announced. Not undone, not in `graphChange` or `snapshot()` |
+| `highlight(nodeIds, edgeIds?)` | emphasizes a path, search results or a trace and dims the rest; `highlight([])` clears |
 | `select(ids)` | selects nodes (`[]` clears); `(selectionChange)` reports `{ nodes, edges }` |
 | `undo()`, `redo()`, `canUndo()`, `canRedo()` | history of the last 100 user actions, kept in the worker; undo/redo report through `graphChange`. Replacing `nodes`/`edges` clears it |
 | `load(source)` | streams a large graph in chunks |
+
+Edges and nodes, still drawn on the canvas:
+
+- `FlowEdge` takes `label`, `dashed` and `animated` (dashes flowing source → target; still when the user prefers reduced motion).
+- `provideNodeFlow({ edge: { routing: 'step' } })` routes every edge as `'bezier'` (default), `'step'` or `'straight'`.
+- `FlowNode.icon` is an image URL (relative to the page, or `data:`) drawn before the label. It is fetched by the worker, so cross-origin images need CORS.
 
 Navigation and layout aids:
 
@@ -102,6 +110,9 @@ Precedence: `--nf-*` in your CSS > `theme` in the provider > the library default
 | `border` | `--nf-border` | borders and dividers |
 | `accent` | `--nf-accent` | focus ring, primary button |
 | `accentText` | `--nf-accent-text` | text on the accent color |
+| `statusRunning` | `--nf-status-running` | running badge |
+| `statusSuccess` | `--nf-status-success` | success badge |
+| `statusError` | `--nf-status-error` | error badge, error list |
 | `fontFamily` | `--nf-font-family` | overlays and canvas labels |
 | `radius` | `--nf-radius` | overlay corner radius |
 

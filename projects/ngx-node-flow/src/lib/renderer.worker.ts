@@ -1,9 +1,9 @@
 /// Runs inside a Worker: owns the canvases, camera and interaction state.
 /// Bundled to a string by scripts/build-worker.mjs (see worker-source.ts).
-import { align, bezier, Camera, distToPolyline, MINIMAP, nodeHeight, portPos, Side, toWorld, zoomAt } from './geometry';
+import { align, Camera, dashes, distToPolyline, MINIMAP, nodeHeight, portPos, route, Side, toWorld, zoomAt } from './geometry';
 import { GlRenderer, RECT_STRIDE, RGBA } from './gl';
 import { cloneGraph, GraphStore, noChanges } from './store';
-import { Command, FlowEdge, FlowNode, FromWorker, GraphChanges, GraphChunk, GraphSnapshot, NodeFlowConfig, ResolvedTheme, ToWorker } from './types';
+import { Command, FlowEdge, FlowNode, FromWorker, GraphChanges, GraphChunk, GraphSnapshot, NodeFlowConfig, NodeStatus, ResolvedTheme, ToWorker } from './types';
 
 const HEADER_TEXT_Y = 12;
 const PAD = 10;
@@ -21,6 +21,16 @@ let width = 1, height = 1, dpr = 1;
 let cam: Camera = { x: 0, y: 0, zoom: 1 };
 let store: GraphStore;
 let readonly = false;
+/** prefers-reduced-motion, from the main thread (workers have no matchMedia): animated edges stand still. */
+let reducedMotion = false;
+/** Page URL, so relative icon URLs resolve as they would in an <img> (this worker runs from a blob: URL). */
+let baseURI = '';
+/** Runtime node state, keyed by node id; idle nodes are not stored. */
+const statuses = new Map<string, { status: NodeStatus; errors: string[] }>();
+/** highlight(): while either set is non-empty, everything else is dimmed. */
+let hiNodes = new Set<string>(), hiEdges = new Set<string>();
+// shortcut: decoded icons are never evicted; fine for an icon set, not for one unique image per node in a huge graph.
+const icons = new Map<string, ImageBitmap | null>(); // null: loading or failed
 /** The consumer set a canConnect input: drops wait for its answer. */
 let canConnect = false;
 let pendingLink: { edge: FlowEdge; detached?: FlowEdge } | null = null;
@@ -83,13 +93,31 @@ function portIndex(n: FlowNode, side: Side, id: string) {
   return ((side === 'in' ? n.inputs : n.outputs) ?? []).findIndex((p) => p.id === id);
 }
 
-/** The edge's curve as a polyline, or null if an endpoint is missing. */
+/** The edge's curve as a polyline (edge.routing), or null if an endpoint is missing. */
 function curve(e: FlowEdge, segments: number): number[] | null {
   const s = store.node(e.source), t = store.node(e.target);
   if (!s || !t) return null;
   const a = portPos(s, 'out', portIndex(s, 'out', e.sourcePort), cfg);
   const b = portPos(t, 'in', portIndex(t, 'in', e.targetPort), cfg);
-  return bezier(a.x, a.y, b.x, b.y, segments);
+  return route(a.x, a.y, b.x, b.y, cfg.edge.routing, segments);
+}
+
+/** The decoded icon, or undefined while it loads (the frame is redrawn when it arrives) or if it failed. */
+function icon(url: string): ImageBitmap | undefined {
+  if (!icons.has(url)) {
+    icons.set(url, null);
+    fetch(new URL(url, baseURI))
+      .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((b) => createImageBitmap(b))
+      .then(
+        (bmp) => {
+          icons.set(url, bmp);
+          schedule();
+        },
+        (err) => console.warn(`ngx-node-flow: icon ${url} not loaded`, err), // stays null: drawn without icon
+      );
+  }
+  return icons.get(url) ?? undefined;
 }
 
 let scheduled = false;
@@ -117,6 +145,12 @@ function pushRect(i: number, x: number, y: number, w: number, h: number, c: RGBA
 }
 
 function pushCurve(i: number, pts: number[], halfWidth: number): number {
+  const need = (i + (pts.length / 2 - 1) * 6) * 2; // dashes and step routes can exceed the per-frame estimate
+  if (need > lines.length) {
+    const grown = new Float32Array(Math.max(need, lines.length * 2));
+    grown.set(lines);
+    lines = grown;
+  }
   for (let p = 0; p + 3 < pts.length; p += 2) {
     const ax = pts[p], ay = pts[p + 1], bx = pts[p + 2], by = pts[p + 3];
     const len = Math.hypot(bx - ax, by - ay) || 1;
@@ -134,6 +168,10 @@ function pushCurve(i: number, pts: number[], halfWidth: number): number {
   return i;
 }
 
+const STATUS_TOKEN = { running: 'statusRunning', success: 'statusSuccess', error: 'statusError' } as const;
+const BADGE = { running: [14, 5, 2.5], success: [10, 10, 5], error: [9, 9, 1] } as const;
+const DIM = 0.3;
+
 function render() {
   const c = cfg.node;
   const portColor = rgba(theme.portColor);
@@ -143,24 +181,32 @@ function render() {
   const m = c.width;
   const visible = store.query(tl.x - m, tl.y - m, br.x + m, br.y + m);
   const showPorts = cam.zoom >= 0.3;
+  const highlighting = hiNodes.size > 0 || hiEdges.size > 0;
 
   drawnNodes = visible;
-  let rectCount = visible.length + 4; // + focus ring, selection rectangle, two guide lines
+  let rectCount = visible.length * 2 + 4; // + focus ring or status badge per node, selection rectangle, two guide lines
   if (showPorts) for (const n of visible) rectCount += (n.inputs?.length ?? 0) + (n.outputs?.length ?? 0);
   if (rects.length < rectCount * RECT_STRIDE) rects = new Float32Array(rectCount * RECT_STRIDE * 2);
 
   // while connecting, ports the dragged edge cannot land on are dimmed (cycles are only checked on drop)
   const link = drag?.kind === 'link' ? drag : null;
-  const dimPort = withAlpha(portColor, 0.25);
   let ri = 0;
   for (const n of visible) {
     const h = nodeHeight(n, cfg);
+    const alpha = highlighting && !hiNodes.has(n.id) ? DIM : 1;
     if (focusVisible && n.id === focused) {
       const g = 3 / cam.zoom; // ~3 screen px ring at any zoom
       pushRect(ri++, n.x - g, n.y - g, c.width + 2 * g, h + 2 * g, accent, c.radius + g);
     }
     const color = selNodes.has(n.id) ? rgba(theme.nodeSelectedColor) : rgba(n.color ?? theme.nodeColor);
-    pushRect(ri++, n.x, n.y, c.width, h, color, c.radius);
+    pushRect(ri++, n.x, n.y, c.width, h, withAlpha(color, alpha), c.radius);
+    const st = statuses.get(n.id);
+    if (st) {
+      // shape as well as color (WCAG 1.4.1): running = bar, success = circle, error = square
+      const [bw, bh, br] = BADGE[st.status as Exclude<NodeStatus, 'idle'>];
+      const col = withAlpha(rgba(theme[STATUS_TOKEN[st.status as Exclude<NodeStatus, 'idle'>]]), alpha);
+      pushRect(ri++, n.x + c.width - 11 - bw / 2, n.y + 12 - bh / 2, bw, bh, col, br);
+    }
     if (!showPorts) continue;
     for (const side of ['in', 'out'] as const) {
       const ports = (side === 'in' ? n.inputs : n.outputs) ?? [];
@@ -168,7 +214,7 @@ function render() {
         const pos = portPos(n, side, p, cfg);
         const r = c.portRadius;
         const ok = !link || (side !== link.side && n.id !== link.node.id && !store.check(toEdge(link, n, ports[p].id), false));
-        pushRect(ri++, pos.x - r, pos.y - r, 2 * r, 2 * r, ok ? portColor : dimPort, r);
+        pushRect(ri++, pos.x - r, pos.y - r, 2 * r, 2 * r, withAlpha(portColor, ok ? alpha : 0.25), r);
       }
     }
   }
@@ -188,26 +234,36 @@ function render() {
   const SEG = cam.zoom >= 0.5 ? 24 : 8, VERTS_PER_CURVE = SEG * 6;
   const curveCount = edges.length + (link ? 1 : 0);
   if (lines.length < curveCount * VERTS_PER_CURVE * 2) lines = new Float32Array(curveCount * VERTS_PER_CURVE * 4);
-  let li = 0;
   const hw = cfg.edge.width / 2;
-  // selected edges go last, so they draw on top in the accent color
-  const picked: FlowEdge[] = [];
-  for (const e of edges) {
-    if (selEdges.has(e.id)) picked.push(e);
-    else {
+  // three color runs, drawn in order: dimmed (outside a highlight), normal, selected (on top, accent)
+  const runs: FlowEdge[][] = [[], [], []];
+  for (const e of edges) runs[selEdges.has(e.id) ? 2 : highlighting && !hiEdges.has(e.id) ? 0 : 1].push(e);
+  const edgeColor = rgba(theme.edgeColor);
+  const colors = [withAlpha(edgeColor, DIM), edgeColor, accent];
+  // dashes keep a constant on-screen size; animated ones flow from source to target
+  const on = 8 / cam.zoom, off = 5 / cam.zoom, phase = reducedMotion ? 0 : (-performance.now() / 1000) * (40 / cam.zoom);
+  let animating = false;
+  const lineBatches: { count: number; color: RGBA }[] = [];
+  let li = 0;
+  runs.forEach((run, k) => {
+    const start = li;
+    for (const e of run) {
       const pts = curve(e, SEG);
-      if (pts) li = pushCurve(li, pts, hw);
+      if (!pts) continue;
+      const w = k === 2 ? hw * 1.5 : hw;
+      if (e.dashed || e.animated) {
+        animating ||= !!e.animated && !reducedMotion;
+        for (const d of dashes(pts, on, off, e.animated ? phase : 0)) li = pushCurve(li, d, w);
+      } else li = pushCurve(li, pts, w);
     }
-  }
-  const accentFrom = li;
-  for (const e of picked) {
-    const pts = curve(e, SEG);
-    if (pts) li = pushCurve(li, pts, hw * 1.5);
-  }
+    lineBatches.push({ count: li - start, color: colors[k] });
+  });
   if (link) {
     const p = portPos(link.node, link.side, portIndex(link.node, link.side, link.port), cfg);
     const [a, b] = link.side === 'out' ? [p, { x: link.wx, y: link.wy }] : [{ x: link.wx, y: link.wy }, p];
-    li = pushCurve(li, bezier(a.x, a.y, b.x, b.y, SEG), hw);
+    const start = li;
+    li = pushCurve(li, route(a.x, a.y, b.x, b.y, cfg.edge.routing, SEG), hw);
+    lineBatches.push({ count: li - start, color: edgeColor });
   }
 
   renderer.draw({
@@ -215,15 +271,14 @@ function render() {
     background: rgba(theme.background),
     grid: cfg.grid.visible ? { size: cfg.grid.size, color: rgba(theme.gridColor) } : null,
     rects, rectCount: ri,
-    lines, lineCount: li,
-    lineColor: rgba(theme.edgeColor),
-    accentFrom, accentColor: accent,
+    lines, lineBatches,
   });
-  drawText(visible);
+  drawText(visible, edges, highlighting);
   if (minimapOn) drawMinimap(tl, br);
   reportSelection();
   reportFocus();
   reportStats();
+  if (animating) schedule(); // keep the dashes flowing while any animated edge is on screen
 }
 
 // --- minimap: a density image of the whole graph (redrawn at most every MINI_MS), plus the viewport box
@@ -286,7 +341,7 @@ function minimapTo(x: number, y: number) {
   cam = { zoom: cam.zoom, x: width / 2 - wx * cam.zoom, y: height / 2 - wy * cam.zoom };
 }
 
-function drawText(visible: FlowNode[]) {
+function drawText(visible: FlowNode[], edges: FlowEdge[], highlighting: boolean) {
   text.setTransform(1, 0, 0, 1, 0, 0);
   text.clearRect(0, 0, text.canvas.width, text.canvas.height);
   if (cam.zoom < 0.35) return; // unreadable anyway; skip the cost
@@ -294,15 +349,34 @@ function drawText(visible: FlowNode[]) {
   text.font = `${cfg.node.fontSize}px ${theme.fontFamily || 'sans-serif'}`;
   text.fillStyle = theme.nodeTextColor;
   text.textBaseline = 'middle';
-  const w = cfg.node.width;
+  const w = cfg.node.width, ICON = 16;
   // shortcut: text lives on a layer above all GL shapes, so overlapping nodes show each other's labels.
   for (const n of visible) {
+    text.globalAlpha = highlighting && !hiNodes.has(n.id) ? DIM : 1;
     text.textAlign = 'left';
-    text.fillText(n.label, n.x + PAD, n.y + HEADER_TEXT_Y, w - 2 * PAD);
+    const bmp = n.icon ? icon(n.icon) : undefined;
+    if (bmp) text.drawImage(bmp, n.x + PAD, n.y + HEADER_TEXT_Y - ICON / 2, ICON, ICON);
+    const indent = n.icon ? ICON + 4 : 0, badge = statuses.has(n.id) ? 14 : 0;
+    text.fillText(n.label, n.x + PAD + indent, n.y + HEADER_TEXT_Y, w - 2 * PAD - indent - badge);
     n.inputs?.forEach((p, i) => text.fillText(p.label ?? p.id, n.x + PAD, portPos(n, 'in', i, cfg).y, w / 2 - PAD));
     text.textAlign = 'right';
     n.outputs?.forEach((p, i) => text.fillText(p.label ?? p.id, n.x + w - PAD, portPos(n, 'out', i, cfg).y, w / 2 - PAD));
   }
+  // edge labels at the middle of the middle segment, with a halo in the background color
+  text.textAlign = 'center';
+  text.lineWidth = 3;
+  text.strokeStyle = theme.background;
+  for (const e of edges) {
+    if (!e.label) continue;
+    const pts = curve(e, 8);
+    if (!pts) continue;
+    const k = Math.floor((pts.length / 2 - 1) / 2) * 2;
+    const x = (pts[k] + pts[k + 2]) / 2, y = (pts[k + 1] + pts[k + 3]) / 2;
+    text.globalAlpha = highlighting && !hiEdges.has(e.id) ? DIM : 1;
+    text.strokeText(e.label, x, y);
+    text.fillText(e.label, x, y);
+  }
+  text.globalAlpha = 1;
 }
 
 // --- selection -------------------------------------------------------------------
@@ -320,7 +394,10 @@ function toggleIn(set: Set<string>, id: string) {
 
 /** Drops removed ids from the selection and focus. */
 function prune(ch: GraphChanges) {
-  for (const id of ch.removeNodes) if (selNodes.delete(id)) selVersion++;
+  for (const id of ch.removeNodes) {
+    if (selNodes.delete(id)) selVersion++;
+    statuses.delete(id);
+  }
   for (const id of ch.removeEdges) if (selEdges.delete(id)) selVersion++;
   if (focused && ch.removeNodes.includes(focused)) focused = null;
 }
@@ -665,8 +742,8 @@ function reportSelection() {
   const only = selNodes.size === 1 && !selEdges.size ? selNodes.values().next().value : undefined;
   const n = only ? store.node(only) : undefined;
   const msg: FromWorker = n
-    ? { type: 'selection', id: n.id, x: n.x * cam.zoom + cam.x, y: n.y * cam.zoom + cam.y, w: cfg.node.width * cam.zoom, h: nodeHeight(n, cfg) * cam.zoom, locked: !!n.locked }
-    : { type: 'selection', id: null, x: 0, y: 0, w: 0, h: 0, locked: false };
+    ? { type: 'selection', id: n.id, x: n.x * cam.zoom + cam.x, y: n.y * cam.zoom + cam.y, w: cfg.node.width * cam.zoom, h: nodeHeight(n, cfg) * cam.zoom, locked: !!n.locked, errors: statuses.get(n.id)?.errors ?? [] }
+    : { type: 'selection', id: null, x: 0, y: 0, w: 0, h: 0, locked: false, errors: [] };
   const key = JSON.stringify(msg);
   if (key !== lastMenu) {
     lastMenu = key;
@@ -677,7 +754,8 @@ function reportSelection() {
 let lastFocus = '';
 function reportFocus() {
   const n = focusVisible && focused ? store.node(focused) : undefined;
-  const msg: FromWorker = { type: 'focus', id: n?.id ?? null, label: n?.label ?? '', selected: !!n && selNodes.has(n.id) };
+  const st = n && statuses.get(n.id);
+  const msg: FromWorker = { type: 'focus', id: n?.id ?? null, label: n?.label ?? '', selected: !!n && selNodes.has(n.id), status: st?.status ?? 'idle', errors: st?.errors ?? [] };
   const key = JSON.stringify(msg);
   if (key !== lastFocus) {
     lastFocus = key;
@@ -726,6 +804,16 @@ function run(command: Command): unknown {
       return store.snapshot();
     case 'find':
       return store.find(command.text, command.limit);
+    case 'setStatus':
+      for (const u of command.updates) {
+        if (u.status === 'idle') statuses.delete(u.id);
+        else statuses.set(u.id, { status: u.status, errors: u.errors ?? [] });
+      }
+      return schedule();
+    case 'highlight':
+      hiNodes = new Set(command.nodes);
+      hiEdges = new Set(command.edges);
+      return schedule();
     case 'fit': {
       const b = store.bounds();
       if (b) frame(b.x0, b.y0, b.x1, b.y1, command.padding);
@@ -814,6 +902,7 @@ addEventListener('message', (e: MessageEvent<ToWorker>) => {
   switch (m.type) {
     case 'init': {
       cfg = m.config;
+      baseURI = m.baseURI;
       theme = m.theme;
       glCanvas = m.gl;
       const gl = m.gl.getContext('webgl2', { antialias: true, premultipliedAlpha: true });
@@ -861,7 +950,7 @@ addEventListener('message', (e: MessageEvent<ToWorker>) => {
       ingest(m.stream).then(() => reply(m.reqId), (err) => fail(m.reqId, err));
       return;
     case 'mode':
-      ({ readonly, canConnect, minimap: minimapOn } = m);
+      ({ readonly, canConnect, minimap: minimapOn, reducedMotion } = m);
       if (readonly && drag?.kind === 'link') onPointer('cancel', 0, 0);
       break;
     case 'theme':
