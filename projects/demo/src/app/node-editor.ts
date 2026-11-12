@@ -1,9 +1,11 @@
 import { Component, effect, linkedSignal, model, OnInit, signal, untracked } from '@angular/core';
 import { form, FormField, max, min, pattern, required } from '@angular/forms/signals';
-import { FlowNode } from 'ngx-node-flow';
+import { FlowNode, FlowPort } from 'ngx-node-flow';
 import { CellData, CellKind, HEX, kindOf, Shape, SHAPES, ZOOM_MAX, ZOOM_MIN } from './cells';
 
 type Ports = 'inputs' | 'outputs';
+/** The form edits the label; the id stays, so renaming a port keeps its edges. */
+type EditablePort = FlowPort & { label: string };
 
 /**
  * Example editor for the sidesheet: edits the draft signal handed over by `nodeFlowEditor`.
@@ -74,7 +76,7 @@ type Ports = 'inputs' | 'outputs';
             <legend>{{ side.title }}</legend>
             @for (port of f[side.key]; track $index) {
               <div class="row">
-                <input [formField]="port" [attr.aria-label]="side.title + ' ' + ($index + 1)" />
+                <input [formField]="port.label" [attr.aria-label]="side.title + ' ' + ($index + 1)" />
                 <button type="button" (click)="removePort(side.key, $index)" [attr.aria-label]="'Remover ' + side.title + ' ' + ($index + 1)">✕</button>
               </div>
             }
@@ -108,8 +110,8 @@ export class NodeEditor implements OnInit {
   private readonly value = signal({
     label: '',
     color: '',
-    inputs: [] as string[],
-    outputs: [] as string[],
+    inputs: [] as EditablePort[],
+    outputs: [] as EditablePort[],
     hex: '',
     shape: 'circle' as Shape,
     zoom: 50,
@@ -156,8 +158,8 @@ export class NodeEditor implements OnInit {
     this.value.set({
       label: n.label,
       color: n.color ?? '',
-      inputs: [...(n.inputs ?? [])],
-      outputs: [...(n.outputs ?? [])],
+      inputs: (n.inputs ?? []).map((p) => ({ ...p, label: p.label ?? p.id })),
+      outputs: (n.outputs ?? []).map((p) => ({ ...p, label: p.label ?? p.id })),
       hex: d?.kind === 'color' ? (d.value ?? '') : '',
       shape: d?.kind === 'shape' ? (d.value ?? 'circle') : 'circle',
       zoom: d?.kind === 'zoom' ? (d.value ?? 50) : 50,
@@ -181,7 +183,7 @@ export class NodeEditor implements OnInit {
   }
 
   protected addPort(side: Ports) {
-    this.value.update((v) => ({ ...v, [side]: [...v[side], `porta${v[side].length + 1}`] }));
+    this.value.update((v) => ({ ...v, [side]: [...v[side], { id: crypto.randomUUID(), label: `porta${v[side].length + 1}` }] }));
   }
 
   protected removePort(side: Ports, i: number) {

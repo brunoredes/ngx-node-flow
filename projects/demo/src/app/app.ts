@@ -30,7 +30,8 @@ export class App {
   }
 
   protected onEdgeRejected(err: EdgeRejectedError) {
-    if (err.reason === 'cycle') this.lastEvent.set(`conexão recusada: ${err.edge.source} → ${err.edge.target} criaria um ciclo`);
+    const why = { cycle: 'criaria um ciclo', type: 'tipos de porta incompatíveis', maxConnections: 'a porta já está ocupada', custom: 'recusada pela regra da aplicação' };
+    this.lastEvent.set(`conexão recusada: ${err.edge.source} → ${err.edge.target} (${why[err.reason]})`);
   }
 
   protected toggleTheme() {

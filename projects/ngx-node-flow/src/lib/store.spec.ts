@@ -1,12 +1,12 @@
 import { DEFAULT_NODE_FLOW_CONFIG as cfg } from './config';
 import { nodeHeight } from './geometry';
-import { applyChanges, GraphStore } from './store';
+import { applyChanges, GraphStore, typesMatch } from './store';
 import { FlowEdge, FlowNode } from './types';
 
-const a = (): FlowNode => ({ id: 'a', x: 0, y: 0, label: 'A', outputs: ['o1', 'o2'] });
-const tpl = (): FlowNode => ({ id: 'new', x: 0, y: 0, label: 'New', inputs: ['i'], outputs: ['o'] });
-const b = (): FlowNode => ({ id: 'b', x: 300, y: 0, label: 'B', inputs: ['in'], outputs: ['out'] });
-const c = (): FlowNode => ({ id: 'c', x: 600, y: 0, label: 'C', inputs: ['in'] });
+const a = (): FlowNode => ({ id: 'a', x: 0, y: 0, label: 'A', outputs: [{ id: 'o1' }, { id: 'o2' }] });
+const tpl = (): FlowNode => ({ id: 'new', x: 0, y: 0, label: 'New', inputs: [{ id: 'i' }], outputs: [{ id: 'o' }] });
+const b = (): FlowNode => ({ id: 'b', x: 300, y: 0, label: 'B', inputs: [{ id: 'in' }], outputs: [{ id: 'out' }] });
+const c = (): FlowNode => ({ id: 'c', x: 600, y: 0, label: 'C', inputs: [{ id: 'in' }] });
 const ab: FlowEdge = { id: 'ab', source: 'a', sourcePort: 'o1', target: 'b', targetPort: 'in' };
 const bc: FlowEdge = { id: 'bc', source: 'b', sourcePort: 'out', target: 'c', targetPort: 'in' };
 
@@ -50,7 +50,7 @@ describe('GraphStore', () => {
 
   it('upsertNode prunes edges whose port disappeared', () => {
     const s = store();
-    expect(s.upsertNode({ ...b(), inputs: ['other'] }).removeEdges).toEqual(['ab']);
+    expect(s.upsertNode({ ...b(), inputs: [{ id: 'other' }] }).removeEdges).toEqual(['ab']);
     expect(s.edgesOf([s.node('b')!, s.node('c')!]).map((e) => e.id)).toEqual(['bc']);
   });
 
@@ -70,7 +70,7 @@ describe('GraphStore', () => {
   it('hit finds ports and bodies through the grid', () => {
     const s = store();
     expect(s.hit(310, 5)?.node.id).toBe('b');
-    expect(s.hit(cfg.node.width, 24 + 10)?.port).toEqual({ side: 'out', name: 'o1' });
+    expect(s.hit(cfg.node.width, 24 + 10)?.port).toEqual({ side: 'out', id: 'o1' });
     expect(s.hit(-500, -500)).toBeNull();
   });
 
@@ -118,7 +118,7 @@ describe('GraphStore.reaches', () => {
     const s = new GraphStore(cfg);
     const nodes: FlowNode[] = [], edges: FlowEdge[] = [];
     for (let i = 0; i < n; i++) {
-      nodes.push({ id: `n${i}`, x: (i % 1000) * 200, y: Math.floor(i / 1000) * 100, label: '', inputs: ['in'], outputs: ['out'] });
+      nodes.push({ id: `n${i}`, x: (i % 1000) * 200, y: Math.floor(i / 1000) * 100, label: '', inputs: [{ id: 'in' }], outputs: [{ id: 'out' }] });
       edges.push({ id: `e${i}`, source: `n${i}`, sourcePort: 'out', target: `n${(i + 1) % n}`, targetPort: 'in' });
     }
     s.addChunk({ nodes, edges });
@@ -168,6 +168,56 @@ describe('GraphStore memory layout', () => {
     s.addChunk({ edges: [ab] });
     expect(s.nodeCount).toBe(0);
     expect(s.node('a')).toBeUndefined();
+  });
+});
+
+describe('connection rules', () => {
+  const typed = (compatibility?: Record<string, string[]>, allowCycles = true) => {
+    const s = new GraphStore({ ...cfg, edge: { ...cfg.edge, allowCycles, compatibility } });
+    s.reset(
+      [
+        { id: 'src', x: 0, y: 0, label: 'S', inputs: [{ id: 'i' }], outputs: [{ id: 'num', type: 'number' }, { id: 'any' }] },
+        { id: 'dst', x: 300, y: 0, label: 'D', inputs: [{ id: 'txt', type: 'text' }, { id: 'one', maxConnections: 1 }], outputs: [{ id: 'o' }] },
+      ],
+      [],
+    );
+    return s;
+  };
+  const e = (sourcePort: string, targetPort: string, source = 'src', target = 'dst'): FlowEdge => ({ id: `${source}:${sourcePort}->${target}:${targetPort}`, source, sourcePort, target, targetPort });
+
+  it('typesMatch: untyped ports and types missing from the map connect to anything', () => {
+    expect(typesMatch({ id: 'a', type: 'number' }, { id: 'b', type: 'text' }, undefined)).toBe(true);
+    expect(typesMatch({ id: 'a', type: 'number' }, { id: 'b', type: 'text' }, { number: ['number'] })).toBe(false);
+    expect(typesMatch({ id: 'a', type: 'number' }, { id: 'b', type: 'text' }, { number: ['text'] })).toBe(true);
+    expect(typesMatch({ id: 'a', type: 'bool' }, { id: 'b', type: 'text' }, { number: ['number'] })).toBe(true);
+    expect(typesMatch({ id: 'a' }, { id: 'b', type: 'text' }, { number: ['number'] })).toBe(true);
+  });
+
+  it('check refuses incompatible types', () => {
+    const s = typed({ number: ['number'] });
+    expect(s.check(e('num', 'txt'))).toBe('type');
+    expect(s.check(e('any', 'txt'))).toBeNull();
+  });
+
+  it('check refuses a full port', () => {
+    const s = typed();
+    expect(s.check(e('num', 'one'))).toBeNull();
+    s.connect(e('num', 'one'));
+    expect(s.portLoad('dst', 'in', 'one')).toBe(1);
+    expect(s.check(e('any', 'one'))).toBe('maxConnections');
+  });
+
+  it('check refuses cycles only when asked to walk the graph', () => {
+    const s = typed(undefined, false);
+    s.connect(e('num', 'txt'));
+    expect(s.check(e('o', 'i', 'dst', 'src'))).toBe('cycle');
+    expect(s.check(e('o', 'i', 'dst', 'src'), false)).toBeNull();
+  });
+
+  it('renaming a port label keeps its edges', () => {
+    const s = store();
+    expect(s.upsertNode({ ...b(), inputs: [{ id: 'in', label: 'Entrada' }] }).removeEdges).toEqual([]);
+    expect(s.node('b')!.inputs).toEqual([{ id: 'in', label: 'Entrada' }]);
   });
 });
 

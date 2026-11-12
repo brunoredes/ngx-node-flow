@@ -1,5 +1,5 @@
 import { hitTest, Hit, nodeHeight } from './geometry';
-import { FlowEdge, FlowNode, GraphChanges, GraphChunk, NodeFlowConfig } from './types';
+import { EdgeRejectReason, FlowEdge, FlowNode, FlowPort, GraphChanges, GraphChunk, NodeFlowConfig } from './types';
 
 const CELL = 1024;
 const GAP = 80;
@@ -19,7 +19,7 @@ function grow<T extends Float64Array | Uint32Array | Uint8Array>(a: T, size: num
 
 /**
  * Worker-side graph stored column-wise: positions and references live in typed arrays indexed by
- * slot, port lists and port names are interned, and objects are only built for what is queried.
+ * slot, port lists and port ids are interned, and objects are only built for what is queried.
  * Edges may reference nodes that have not arrived yet: those get a placeholder slot (alive = 0).
  */
 export class GraphStore {
@@ -39,7 +39,7 @@ export class GraphStore {
   private nFree: number[] = [];
   private liveNodes = 0;
   private stamp = 0;
-  // interned port lists ({inputs, outputs} combos) and port names
+  // interned port lists ({inputs, outputs} combos) and port ids
   private ports: Ports[] = [];
   private portsIdx = new Map<string, number>();
   private strs: string[] = [];
@@ -77,9 +77,9 @@ export class GraphStore {
   }
 
   private portsOf(n: Ports): number {
-    const key = (n.inputs ?? []).join('\0') + '\u0001' + (n.outputs ?? []).join('\0');
+    const key = JSON.stringify([n.inputs, n.outputs]);
     let i = this.portsIdx.get(key);
-    if (i === undefined) this.portsIdx.set(key, (i = this.ports.push({ inputs: n.inputs && [...n.inputs], outputs: n.outputs && [...n.outputs] }) - 1));
+    if (i === undefined) this.portsIdx.set(key, (i = this.ports.push({ inputs: n.inputs?.map((p) => ({ ...p })), outputs: n.outputs?.map((p) => ({ ...p })) }) - 1));
     return i;
   }
 
@@ -304,6 +304,29 @@ export class GraphStore {
     return false;
   }
 
+  /** Edges plugged into one port of a node. */
+  portLoad(nodeId: string, side: 'in' | 'out', portId: string): number {
+    const s = this.nIdx.get(nodeId), p = this.strIdx.get(portId);
+    if (s === undefined || p === undefined) return 0;
+    const [list, col] = side === 'in' ? [this.inn[s], this.eTp] : [this.out[s], this.eSp];
+    return list?.reduce((n, e) => n + +(col[e] === p), 0) ?? 0;
+  }
+
+  /**
+   * Why the user may not add `edge` (null = allowed): port types, then free capacity, then cycles.
+   * `cycles: false` skips the (possibly whole-graph) cycle walk, for per-frame drag hints.
+   */
+  check(edge: FlowEdge, cycles = true): EdgeRejectReason | null {
+    const out = this.node(edge.source)?.outputs?.find((p) => p.id === edge.sourcePort);
+    const inp = this.node(edge.target)?.inputs?.find((p) => p.id === edge.targetPort);
+    if (!out || !inp) return null; // unknown ports: connect() decides, nothing to rule on here
+    if (!typesMatch(out, inp, this.cfg.edge.compatibility)) return 'type';
+    const full = (p: FlowPort, id: string, side: 'in' | 'out') => p.maxConnections !== undefined && this.portLoad(id, side, p.id) >= p.maxConnections;
+    if (full(out, edge.source, 'out') || full(inp, edge.target, 'in')) return 'maxConnections';
+    if (cycles && !this.cfg.edge.allowCycles && this.reaches(edge.target, edge.source)) return 'cycle';
+    return null;
+  }
+
   hit(wx: number, wy: number): Hit | null {
     const r = this.cfg.node.portRadius * 2;
     return hitTest(this.query(wx - r, wy - r, wx + r, wy + r), wx, wy, this.cfg);
@@ -362,8 +385,8 @@ export class GraphStore {
     const s = this.nIdx.get(from.id)!;
     const used = new Set((this.out[s] ?? []).map((e) => this.strs[this.eSp[e]]));
     const outs = from.outputs ?? [];
-    const port = outs.find((p) => !used.has(p)) ?? outs[0];
-    const input = node.inputs?.[0];
+    const port = (outs.find((p) => !used.has(p.id)) ?? outs[0])?.id;
+    const input = node.inputs?.[0]?.id;
     if (port && input) {
       const edge = { id: `${from.id}:${port}->${node.id}:${input}`, source: from.id, sourcePort: port, target: node.id, targetPort: input };
       this.setEdge(edge);
@@ -399,8 +422,8 @@ export class GraphStore {
     const removeEdges: string[] = [];
     for (const e of this.edgesAt(s)) {
       const gone =
-        (this.eSrc[e] === s && !node.outputs?.includes(this.strs[this.eSp[e]])) ||
-        (this.eDst[e] === s && !node.inputs?.includes(this.strs[this.eTp[e]]));
+        (this.eSrc[e] === s && !node.outputs?.some((p) => p.id === this.strs[this.eSp[e]])) ||
+        (this.eDst[e] === s && !node.inputs?.some((p) => p.id === this.strs[this.eTp[e]]));
       if (gone) {
         removeEdges.push(this.eId[e]);
         this.deleteEdgeSlot(e);
@@ -420,4 +443,11 @@ export function applyChanges(nodes: FlowNode[], edges: FlowEdge[], ch: GraphChan
     nodes: upsert(nodes, ch.removeNodes, ch.upsertNodes),
     edges: upsert(edges, ch.removeEdges, ch.upsertEdges),
   };
+}
+
+/** Whether an output port may feed an input port under `edge.compatibility` (untyped ports match anything). */
+export function typesMatch(out: FlowPort, inp: FlowPort, compatibility: Record<string, string[]> | undefined): boolean {
+  if (!compatibility || out.type === undefined || inp.type === undefined) return true;
+  const allowed = compatibility[out.type];
+  return !allowed || allowed.includes(inp.type);
 }

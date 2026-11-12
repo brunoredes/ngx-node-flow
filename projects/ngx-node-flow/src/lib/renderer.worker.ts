@@ -2,7 +2,7 @@
 /// Bundled to a string by scripts/build-worker.mjs (see worker-source.ts).
 import { bezier, Camera, nodeHeight, portPos, Side, toWorld, zoomAt } from './geometry';
 import { GlRenderer, RECT_STRIDE, RGBA } from './gl';
-import { GraphStore } from './store';
+import { GraphStore, noChanges } from './store';
 import { Command, FlowEdge, FlowNode, FromWorker, GraphChanges, GraphChunk, NodeFlowConfig, ResolvedTheme, ToWorker } from './types';
 
 const HEADER_TEXT_Y = 12;
@@ -18,6 +18,9 @@ let cam: Camera = { x: 0, y: 0, zoom: 1 };
 let store: GraphStore;
 let selected: string | null = null;
 let readonly = false;
+/** The consumer set a canConnect input: drops wait for its answer. */
+let canConnect = false;
+let pendingLink: { edge: FlowEdge; detached?: FlowEdge } | null = null;
 
 type Drag =
   | { kind: 'pan'; sx: number; sy: number }
@@ -48,8 +51,8 @@ function rgba(css: string): RGBA {
   return c;
 }
 
-function portIndex(n: FlowNode, side: Side, name: string) {
-  return ((side === 'in' ? n.inputs : n.outputs) ?? []).indexOf(name);
+function portIndex(n: FlowNode, side: Side, id: string) {
+  return ((side === 'in' ? n.inputs : n.outputs) ?? []).findIndex((p) => p.id === id);
 }
 
 let scheduled = false;
@@ -107,17 +110,21 @@ function render() {
   if (showPorts) for (const n of visible) rectCount += (n.inputs?.length ?? 0) + (n.outputs?.length ?? 0);
   if (rects.length < rectCount * RECT_STRIDE) rects = new Float32Array(rectCount * RECT_STRIDE * 2);
 
+  // while connecting, ports the dragged edge cannot land on are dimmed (cycles are only checked on drop)
+  const link = drag?.kind === 'link' ? drag : null;
+  const dimPort: RGBA = [portColor[0], portColor[1], portColor[2], portColor[3] * 0.25];
   let ri = 0;
   for (const n of visible) {
     const color = n.id === selected ? rgba(theme.nodeSelectedColor) : rgba(n.color ?? theme.nodeColor);
     pushRect(ri++, n.x, n.y, c.width, nodeHeight(n, cfg), color, c.radius);
     if (!showPorts) continue;
     for (const side of ['in', 'out'] as const) {
-      const names = (side === 'in' ? n.inputs : n.outputs) ?? [];
-      for (let p = 0; p < names.length; p++) {
+      const ports = (side === 'in' ? n.inputs : n.outputs) ?? [];
+      for (let p = 0; p < ports.length; p++) {
         const pos = portPos(n, side, p, cfg);
         const r = c.portRadius;
-        pushRect(ri++, pos.x - r, pos.y - r, 2 * r, 2 * r, portColor, r);
+        const ok = !link || (side !== link.side && n.id !== link.node.id && !store.check(toEdge(link, n, ports[p].id), false));
+        pushRect(ri++, pos.x - r, pos.y - r, 2 * r, 2 * r, ok ? portColor : dimPort, r);
       }
     }
   }
@@ -168,9 +175,9 @@ function drawText(visible: FlowNode[]) {
   for (const n of visible) {
     text.textAlign = 'left';
     text.fillText(n.label, n.x + PAD, n.y + HEADER_TEXT_Y, w - 2 * PAD);
-    n.inputs?.forEach((name, i) => text.fillText(name, n.x + PAD, portPos(n, 'in', i, cfg).y, w / 2 - PAD));
+    n.inputs?.forEach((p, i) => text.fillText(p.label ?? p.id, n.x + PAD, portPos(n, 'in', i, cfg).y, w / 2 - PAD));
     text.textAlign = 'right';
-    n.outputs?.forEach((name, i) => text.fillText(name, n.x + w - PAD, portPos(n, 'out', i, cfg).y, w / 2 - PAD));
+    n.outputs?.forEach((p, i) => text.fillText(p.label ?? p.id, n.x + w - PAD, portPos(n, 'out', i, cfg).y, w / 2 - PAD));
   }
 }
 
@@ -183,13 +190,13 @@ function onPointer(kind: 'down' | 'move' | 'up' | 'cancel', sx: number, sy: numb
     const hit = store.hit(w.x, w.y);
     const port = readonly ? undefined : hit?.port;
     // grabbing a connected input picks up its edge (last one) so it can be reconnected or dropped
-    const existing = port?.side === 'in' ? store.edgeInto(hit!.node.id, port.name) : undefined;
+    const existing = port?.side === 'in' ? store.edgeInto(hit!.node.id, port.id) : undefined;
     const source = existing && store.node(existing.source);
     if (existing && source) {
       store.disconnect(existing.id);
       drag = { kind: 'link', node: source, side: 'out', port: existing.sourcePort, wx: w.x, wy: w.y, detached: existing };
     } else if (hit && port) {
-      drag = { kind: 'link', node: hit.node, side: port.side, port: port.name, wx: w.x, wy: w.y };
+      drag = { kind: 'link', node: hit.node, side: port.side, port: port.id, wx: w.x, wy: w.y };
     } else if (hit) {
       // bring to front so it draws (and hit-tests) on top
       store.bringToFront(hit.node.id);
@@ -220,25 +227,56 @@ function onPointer(kind: 'down' | 'move' | 'up' | 'cancel', sx: number, sy: numb
       else send({ type: 'nodeClick', id: drag.node.id });
     } else if (drag.kind === 'link') {
       const hit = store.hit(w.x, w.y);
-      const edge = hit?.port && hit.port.side !== drag.side && hit.node.id !== drag.node.id ? toEdge(drag, hit.node, hit.port.name) : null;
-      // checked while a picked-up edge is still out of the store, since the new edge replaces it
-      const cyclic = !!edge && !cfg.edge.allowCycles && store.reaches(edge.target, edge.source);
-      if (cyclic) send({ type: 'edgeRejected', edge: edge!, reason: 'cycle' });
-      if (drag.detached && edge && (cyclic || sameEdge(drag.detached, edge))) {
-        store.connect(drag.detached); // refused or dropped back where it was: restore
-      } else if (!cyclic) {
-        if (drag.detached) changed({ upsertNodes: [], removeNodes: [], upsertEdges: [], removeEdges: [drag.detached.id] });
-        const added = edge && store.connect(edge);
-        if (added) {
-          changed(added);
-          send({ type: 'edgeCreated', edge: edge! });
+      const edge = hit?.port && hit.port.side !== drag.side && hit.node.id !== drag.node.id ? toEdge(drag, hit.node, hit.port.id) : null;
+      const { detached } = drag;
+      if (detached && edge && sameEdge(detached, edge)) {
+        store.connect(detached); // dropped back where it was
+      } else if (edge && canConnect) {
+        // the picked-up edge stays out of the store until the main thread answers (resolveConnect)
+        if (!reject(edge, detached)) {
+          if (pendingLink?.detached) store.connect(pendingLink.detached); // a newer drop supersedes an unanswered one
+          pendingLink = { edge, detached };
+          send({ type: 'connectRequest', edge });
         }
+      } else if (!edge || !reject(edge, detached)) {
+        link(edge, detached);
       }
     }
     drag = null;
   } else {
     return; // hover move with no drag: nothing changed
   }
+  schedule();
+}
+
+/**
+ * Refuses `edge` if a declarative rule forbids it, restoring the edge it was meant to replace.
+ * Checked while a picked-up edge is still out of the store, since the new edge replaces it.
+ */
+function reject(edge: FlowEdge, detached: FlowEdge | undefined, reason = store.check(edge)): boolean {
+  if (!reason) return false;
+  send({ type: 'edgeRejected', edge, reason });
+  if (detached) store.connect(detached);
+  return true;
+}
+
+/** Commits a connection gesture: drops the picked-up edge (if any) and adds the new one (if any). */
+function link(edge: FlowEdge | null, detached: FlowEdge | undefined) {
+  const ch = noChanges();
+  if (detached) ch.removeEdges.push(detached.id);
+  const added = edge && store.connect(edge);
+  if (added) ch.upsertEdges.push(...added.upsertEdges);
+  if (detached || added) changed(ch);
+  if (added) send({ type: 'edgeCreated', edge: edge! });
+}
+
+/** The main thread's answer to a connectRequest (the canConnect input). */
+function resolveConnect(ok: boolean) {
+  const p = pendingLink;
+  pendingLink = null;
+  if (!p) return;
+  // the graph may have changed while waiting: rules are checked again
+  if (!reject(p.edge, p.detached, ok ? store.check(p.edge) : 'custom')) link(p.edge, p.detached);
   schedule();
 }
 
@@ -308,6 +346,8 @@ function run(command: Command): unknown {
     case 'zoom':
       setCam(zoomAt(cam, width / 2, height / 2, command.zoom / cam.zoom, cfg.zoom.min, cfg.zoom.max));
       return;
+    case 'resolveConnect':
+      return resolveConnect(command.ok);
     case 'select':
       selected = command.ids.find((id) => store.node(id)) ?? null;
       schedule();
@@ -385,6 +425,7 @@ addEventListener('message', (e: MessageEvent<ToWorker>) => {
     case 'data':
       store.reset(m.nodes, m.edges);
       drag = null; // dragged objects were replaced
+      pendingLink = null;
       if (selected && !store.node(selected)) selected = null;
       if (!store.nodeCount) cam = { x: 0, y: 0, zoom: 1 };
       break;
@@ -399,7 +440,7 @@ addEventListener('message', (e: MessageEvent<ToWorker>) => {
       ingest(m.stream).then(() => reply(m.reqId), (err) => fail(m.reqId, err));
       return;
     case 'mode':
-      readonly = m.readonly;
+      ({ readonly, canConnect } = m);
       if (readonly && drag?.kind === 'link') onPointer('cancel', 0, 0);
       break;
     case 'theme':

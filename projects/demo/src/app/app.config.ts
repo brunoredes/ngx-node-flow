@@ -7,7 +7,8 @@ export const appConfig: ApplicationConfig = {
     provideNodeFlow({
       grid: { size: 12 },
       // the cell flow is a DAG; the streamed 1M ring is loaded data, which is not checked
-      edge: { allowCycles: false },
+      // typed cell ports: each result input only takes its own kind (see cells.ts)
+      edge: { allowCycles: false, compatibility: { color: ['color'], shape: ['shape'], zoom: ['zoom'] } },
       labels: {
         canvas: 'Editor de fluxo',
         nodeActions: 'Ações da célula',

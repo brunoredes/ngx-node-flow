@@ -18,7 +18,7 @@ describe('provideNodeFlow', () => {
 });
 
 describe('geometry', () => {
-  const node: FlowNode = { id: 'a', x: 100, y: 50, label: 'A', inputs: ['in'], outputs: ['out'] };
+  const node: FlowNode = { id: 'a', x: 100, y: 50, label: 'A', inputs: [{ id: 'in' }], outputs: [{ id: 'out' }] };
 
   it('zoomAt keeps the world point under the cursor fixed', () => {
     const cam = { x: 10, y: 20, zoom: 1 };
@@ -31,7 +31,7 @@ describe('geometry', () => {
 
   it('hitTest finds ports before node bodies, and misses empty space', () => {
     const out = portPos(node, 'out', 0, cfg);
-    expect(hitTest([node], out.x, out.y, cfg)?.port).toEqual({ side: 'out', name: 'out' });
+    expect(hitTest([node], out.x, out.y, cfg)?.port).toEqual({ side: 'out', id: 'out' });
     expect(hitTest([node], node.x + 50, node.y + 5, cfg)).toEqual({ node });
     expect(hitTest([node], 0, 0, cfg)).toBeNull();
   });

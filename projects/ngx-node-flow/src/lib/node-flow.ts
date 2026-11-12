@@ -143,6 +143,12 @@ export class NodeFlow {
   readonly beforeRemove = input<(node: FlowNode) => boolean | Promise<boolean>>();
   /** View-only: pan, zoom and select still work; nothing in the graph can change. */
   readonly readonly = input(false);
+  /**
+   * Last word on a connection the user drops, after the declarative rules (edge.compatibility, maxConnections,
+   * allowCycles) passed. Return false (or resolve false) to refuse it: edgeRejected fires with reason 'custom'.
+   * Runs once per drop, never while dragging.
+   */
+  readonly canConnect = input<(edge: FlowEdge) => boolean | Promise<boolean>>();
   readonly nodeClick = output<string>();
   readonly edgeCreated = output<FlowEdge>();
   /** A connection dragged by the user was refused by a graph policy; nothing changed in the graph. */
@@ -188,7 +194,7 @@ export class NodeFlow {
       const worker = this.worker(), nodes = this.nodes(), edges = this.edges();
       worker?.postMessage({ type: 'data', nodes, edges } satisfies ToWorker);
     });
-    effect(() => this.worker()?.postMessage({ type: 'mode', readonly: this.readonly() } satisfies ToWorker));
+    effect(() => this.worker()?.postMessage({ type: 'mode', readonly: this.readonly(), canConnect: !!this.canConnect() } satisfies ToWorker));
 
     // Browser-only (skipped on SSR): canvases must exist before transferring them.
     afterNextRender(() => {
@@ -309,7 +315,7 @@ export class NodeFlow {
   }
 
   private newNode(): NewFlowNode {
-    return this.createNode()?.() ?? { label: this.l.newNode, inputs: ['in'], outputs: ['out'] };
+    return this.createNode()?.() ?? { label: this.l.newNode, inputs: [{ id: 'in' }], outputs: [{ id: 'out' }] };
   }
 
   protected add(id: string) {
@@ -395,6 +401,16 @@ export class NodeFlow {
     this.error.emit(new Error(message));
   }
 
+  private async answerConnect(edge: FlowEdge) {
+    let ok = false;
+    try {
+      ok = (await this.canConnect()?.(edge)) ?? true;
+    } catch (err) {
+      this.fail(`ngx-node-flow canConnect: ${err instanceof Error ? err.message : String(err)}`); // a throwing rule refuses
+    }
+    await this.command({ op: 'resolveConnect', ok });
+  }
+
   protected pointer(e: PointerEvent, kind: 'down' | 'move' | 'up' | 'cancel') {
     if (this.draft()) return; // the sheet is modal: editing must not race with drags
     if (kind === 'down' && (e.button !== 0 || this.pointers.size >= 2)) return; // primary button; two touches max
@@ -453,6 +469,9 @@ export class NodeFlow {
         break;
       case 'edgeCreated':
         this.edgeCreated.emit(m.edge);
+        break;
+      case 'connectRequest':
+        void this.answerConnect(m.edge);
         break;
       case 'edgeRejected':
         this.edgeRejected.emit(new EdgeRejectedError(m.edge, m.reason));

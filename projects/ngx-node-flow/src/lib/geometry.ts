@@ -11,7 +11,7 @@ export type Side = 'in' | 'out';
 
 export interface Hit {
   node: FlowNode;
-  port?: { side: Side; name: string };
+  port?: { side: Side; id: string };
 }
 
 const PORT_SPACING = 20;
@@ -46,10 +46,10 @@ export function hitTest(nodes: FlowNode[], wx: number, wy: number, cfg: NodeFlow
   for (let i = nodes.length - 1; i >= 0; i--) {
     const n = nodes[i];
     for (const side of ['in', 'out'] as const) {
-      const names = (side === 'in' ? n.inputs : n.outputs) ?? [];
-      for (let p = 0; p < names.length; p++) {
+      const ports = (side === 'in' ? n.inputs : n.outputs) ?? [];
+      for (let p = 0; p < ports.length; p++) {
         const pos = portPos(n, side, p, cfg);
-        if ((pos.x - wx) ** 2 + (pos.y - wy) ** 2 <= r2) return { node: n, port: { side, name: names[p] } };
+        if ((pos.x - wx) ** 2 + (pos.y - wy) ** 2 <= r2) return { node: n, port: { side, id: ports[p].id } };
       }
     }
     if (wx >= n.x && wx <= n.x + cfg.node.width && wy >= n.y && wy <= n.y + nodeHeight(n, cfg)) return { node: n };

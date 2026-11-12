@@ -18,7 +18,7 @@ export async function* generateGraph(count: number, chunkSize: number, prefix = 
     const nodes: FlowNode[] = [];
     const edges: FlowEdge[] = [];
     for (let i = start; i < Math.min(start + chunkSize, count); i++) {
-      nodes.push({ id: prefix + i, x: (i % 40) * 200, y: 400 + Math.floor(i / 40) * 100, label: `Node ${i}`, inputs: ['in'], outputs: ['out'] });
+      nodes.push({ id: prefix + i, x: (i % 40) * 200, y: 400 + Math.floor(i / 40) * 100, label: `Node ${i}`, inputs: [{ id: 'in' }], outputs: [{ id: 'out' }] });
       const t = prefix + next[i];
       edges.push({ id: `${prefix}${i}:out->${t}:in`, source: prefix + i, sourcePort: 'out', target: t, targetPort: 'in' });
     }

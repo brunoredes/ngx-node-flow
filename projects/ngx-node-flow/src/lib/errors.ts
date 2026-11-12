@@ -1,9 +1,8 @@
-import { FlowEdge } from './types';
+import { EdgeRejectReason, FlowEdge } from './types';
 
-/** Why a connection made by the user was refused. */
-export type EdgeRejectReason = 'cycle';
+export type { EdgeRejectReason };
 
-/** Emitted by `(edgeRejected)` when a dragged connection breaks a graph policy (e.g. `edge.allowCycles: false`). */
+/** Emitted by `(edgeRejected)` when a dragged connection breaks a graph rule (`edge.allowCycles`, `edge.compatibility`, `maxConnections`, `canConnect`). */
 export class EdgeRejectedError extends Error {
   override readonly name = 'EdgeRejectedError';
 

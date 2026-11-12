@@ -1,10 +1,22 @@
+/** A connection point. Edges reference it by `id`, so `label` can change without dropping edges. */
+export interface FlowPort {
+  id: string;
+  /** Shown next to the port; defaults to the id. */
+  label?: string;
+  /** Matched against `edge.compatibility`; untyped ports connect to anything. */
+  type?: string;
+  /** Edges this port accepts from user drags; unlimited when omitted. */
+  maxConnections?: number;
+}
+
 export interface FlowNode {
   id: string;
   x: number;
   y: number;
   label: string;
-  inputs?: string[];
-  outputs?: string[];
+  /** Port ids must be unique within each list. */
+  inputs?: FlowPort[];
+  outputs?: FlowPort[];
   /** A literal CSS color (no var()); falls back to the theme nodeColor. */
   color?: string;
   /** Locked nodes cannot be dragged or removed by the user. */
@@ -51,8 +63,13 @@ export type ResolvedTheme = Record<keyof NodeFlowTheme, string>;
 export interface NodeFlowConfig {
   grid: { size: number; visible: boolean };
   node: { width: number; height: number; radius: number; portRadius: number; fontSize: number };
-  /** allowCycles: false refuses a drag-created edge that would close a cycle (loaded data is not checked). */
-  edge: { width: number; allowCycles: boolean };
+  /**
+   * Rules for edges the user drags (loaded data is not checked):
+   * - allowCycles: false refuses an edge that would close a cycle.
+   * - compatibility: output port type -> input port types it may connect to. A port without a type,
+   *   or a type missing from the map, connects to anything. Omit the map to allow every pair.
+   */
+  edge: { width: number; allowCycles: boolean; compatibility?: Record<string, string[]> };
   zoom: { min: number; max: number };
   theme: NodeFlowTheme;
   labels: NodeFlowLabels;
@@ -101,7 +118,8 @@ export type Command =
   | { op: 'fit'; padding: number }
   | { op: 'center'; id: string }
   | { op: 'zoom'; zoom: number }
-  | { op: 'select'; ids: string[] };
+  | { op: 'select'; ids: string[] }
+  | { op: 'resolveConnect'; ok: boolean };
 
 export type ToWorker =
   | { type: 'init'; gl: OffscreenCanvas; text: OffscreenCanvas; config: NodeFlowConfig; theme: ResolvedTheme }
@@ -111,17 +129,25 @@ export type ToWorker =
   /** Pans by (panX, panY) CSS px, then zooms by factor `zoom` around (x, y). */
   | { type: 'view'; x: number; y: number; zoom: number; panX: number; panY: number }
   | { type: 'theme'; theme: ResolvedTheme }
-  | { type: 'mode'; readonly: boolean }
+  | { type: 'mode'; readonly: boolean; canConnect: boolean }
   | { type: 'command'; reqId: number; command: Command }
   | { type: 'stream'; reqId: number; stream: ReadableStream<GraphChunk> };
 
 export type FromWorker =
   | { type: 'nodeClick'; id: string }
   | { type: 'edgeCreated'; edge: FlowEdge }
-  | { type: 'edgeRejected'; edge: FlowEdge; reason: 'cycle' }
+  | { type: 'edgeRejected'; edge: FlowEdge; reason: EdgeRejectReason }
+  /** A drop passed the declarative rules and waits for the canConnect input (answered by resolveConnect). */
+  | { type: 'connectRequest'; edge: FlowEdge }
   | { type: 'changes'; changes: GraphChanges }
   | { type: 'stats'; nodes: number; edges: number }
   | { type: 'reply'; reqId: number; value?: unknown; error?: string }
   | { type: 'error'; message: string }
   /** Screen rect (CSS px) of the selected node; id null = nothing selected. */
   | { type: 'selection'; id: string | null; x: number; y: number; w: number; h: number; locked: boolean };
+
+/**
+ * Why a connection made by the user was refused: `cycle` (edge.allowCycles), `type` (edge.compatibility),
+ * `maxConnections` (a port is full) or `custom` (the canConnect input returned false).
+ */
+export type EdgeRejectReason = 'cycle' | 'type' | 'maxConnections' | 'custom';
