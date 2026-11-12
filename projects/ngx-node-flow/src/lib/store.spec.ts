@@ -86,6 +86,48 @@ describe('GraphStore', () => {
     expect(s.connect({ ...ab, id: 'dup' })).toBeNull();
     expect(s.edgeInto('b', 'in')).toEqual(ab);
   });
+
+  it('removes a self-loop once, from both directions', () => {
+    const loop: FlowEdge = { id: 'bb', source: 'b', sourcePort: 'out', target: 'b', targetPort: 'in' };
+    const s = store([b()], [loop]);
+    expect(s.remove('b').removeEdges).toEqual(['bb']);
+    expect(s.edgeCount).toBe(0);
+  });
+});
+
+describe('GraphStore.reaches', () => {
+  it('follows edge direction only', () => {
+    const s = store(); // a -> b -> c
+    expect(s.reaches('a', 'c')).toBe(true);
+    expect(s.reaches('c', 'a')).toBe(false);
+    expect(s.reaches('b', 'b')).toBe(true);
+    expect(s.reaches('a', 'missing')).toBe(false);
+  });
+
+  it('sees edges added and removed since the last query', () => {
+    const s = store();
+    s.disconnect('bc');
+    expect(s.reaches('a', 'c')).toBe(false);
+    s.connect({ id: 'ca', source: 'c', sourcePort: 'x', target: 'a', targetPort: 'y' });
+    expect(s.reaches('c', 'b')).toBe(true);
+  });
+
+  it('walks a 1M-node ring iteratively, without blowing the stack', () => {
+    const n = 1_000_000;
+    const s = new GraphStore(cfg);
+    const nodes: FlowNode[] = [], edges: FlowEdge[] = [];
+    for (let i = 0; i < n; i++) {
+      nodes.push({ id: `n${i}`, x: (i % 1000) * 200, y: Math.floor(i / 1000) * 100, label: '', inputs: ['in'], outputs: ['out'] });
+      edges.push({ id: `e${i}`, source: `n${i}`, sourcePort: 'out', target: `n${(i + 1) % n}`, targetPort: 'in' });
+    }
+    s.addChunk({ nodes, edges });
+    const t = performance.now();
+    expect(s.reaches('n1', 'n0')).toBe(true); // worst case: the whole ring
+    const ms = performance.now() - t;
+    expect(ms).toBeLessThan(1000); // generous bound for CI; the old string-keyed adjacency took ~1.2 s
+    s.disconnect('e500000');
+    expect(s.reaches('n1', 'n0')).toBe(false);
+  }, 30_000);
 });
 
 describe('GraphStore memory layout', () => {

@@ -19,6 +19,7 @@
     (graphChange)="onGraphChange($event)"
     (nodeClick)="lastEvent.set('click: ' + $event)"
     (edgeCreated)="lastEvent.set('edge: ' + $event.id)"
+    (edgeRejected)="onEdgeRejected($event)"
   >
     <ng-template nodeFlowEditor let-draft>
       <app-node-editor [(node)]="draft" />

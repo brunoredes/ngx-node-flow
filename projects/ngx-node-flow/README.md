@@ -21,6 +21,7 @@ Policy is yours, not the library's:
 
 - `[createNode]="() => ({ label: 'Step', inputs: ['in'], outputs: ['out'] })"` builds nodes added from the menu (id and position are assigned for you).
 - `[beforeRemove]="confirmRemove"` runs before a removal; return `false` (or a promise of it) to keep the node.
+- `provideNodeFlow({ edge: { allowCycles: false } })` refuses a connection dragged by the user when it would close a cycle (a picked-up edge goes back where it was) and emits `(edgeRejected)` with an `EdgeRejectedError` carrying the `edge` and the `reason`, so the app can tell the user. Graphs passed in or streamed by `load()` are not checked. The check walks what is downstream of the target, so on a single 1M-node ring it costs about 15 ms per drop.
 - `provideNodeFlow({ labels: { ... } })` sets the UI strings (defaults are English, see `NodeFlowLabels`).
 
 Build with `npm run build:lib` (it bundles the worker first). Pages with a CSP need `worker-src blob:`.

@@ -217,10 +217,13 @@ function onPointer(kind: 'down' | 'move' | 'up' | 'cancel', sx: number, sy: numb
       else send({ type: 'nodeClick', id: drag.node.id });
     } else if (drag.kind === 'link') {
       const hit = store.hit(w.x, w.y);
-      const edge = hit?.port && hit.port.side !== drag.side && hit.node !== drag.node ? toEdge(drag, hit.node, hit.port.name) : null;
-      if (drag.detached && edge && sameEdge(drag.detached, edge)) {
-        store.connect(drag.detached); // dropped back where it was
-      } else {
+      const edge = hit?.port && hit.port.side !== drag.side && hit.node.id !== drag.node.id ? toEdge(drag, hit.node, hit.port.name) : null;
+      // checked while a picked-up edge is still out of the store, since the new edge replaces it
+      const cyclic = !!edge && !cfg.edge.allowCycles && store.reaches(edge.target, edge.source);
+      if (cyclic) send({ type: 'edgeRejected', edge: edge!, reason: 'cycle' });
+      if (drag.detached && edge && (cyclic || sameEdge(drag.detached, edge))) {
+        store.connect(drag.detached); // refused or dropped back where it was: restore
+      } else if (!cyclic) {
         if (drag.detached) changed({ upsertNodes: [], removeNodes: [], upsertEdges: [], removeEdges: [drag.detached.id] });
         const added = edge && store.connect(edge);
         if (added) {

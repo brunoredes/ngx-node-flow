@@ -18,6 +18,7 @@ import { NODE_FLOW_CONFIG } from './config';
 import { resolveTheme, themeStyles, watchTheme } from './theme';
 import { iterate, toReadableStream } from './stream';
 import { NodeFlowEditor } from './node-flow-editor';
+import { EdgeRejectedError } from './errors';
 import { Command, FlowEdge, FlowNode, FromWorker, GraphChanges, GraphChunk, NewFlowNode, NodeFlowTheme, ToWorker } from './types';
 import { WORKER_SOURCE } from './worker-source';
 
@@ -140,6 +141,8 @@ export class NodeFlow {
   readonly beforeRemove = input<(node: FlowNode) => boolean | Promise<boolean>>();
   readonly nodeClick = output<string>();
   readonly edgeCreated = output<FlowEdge>();
+  /** A connection dragged by the user was refused by a graph policy; nothing changed in the graph. */
+  readonly edgeRejected = output<EdgeRejectedError>();
   /** Every change to the worker-owned graph (moves, edits, connections), for persistence. */
   readonly graphChange = output<GraphChanges>();
   /** The renderer could not start (e.g. no WebGL2) or the worker crashed. */
@@ -420,6 +423,9 @@ export class NodeFlow {
         break;
       case 'edgeCreated':
         this.edgeCreated.emit(m.edge);
+        break;
+      case 'edgeRejected':
+        this.edgeRejected.emit(new EdgeRejectedError(m.edge, m.reason));
         break;
       case 'selection':
         this.selection.set(m.id === null ? null : (m as Selection));

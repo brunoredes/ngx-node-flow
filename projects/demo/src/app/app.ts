@@ -1,5 +1,5 @@
 import { Component, computed, DOCUMENT, inject, signal, viewChild } from '@angular/core';
-import { applyChanges, GraphChanges, NodeFlow, NodeFlowEditor } from 'ngx-node-flow';
+import { applyChanges, EdgeRejectedError, GraphChanges, NodeFlow, NodeFlowEditor } from 'ngx-node-flow';
 import { initialEdges, initialNodes, resolveResult } from './cells';
 import { generateGraph } from './generate-graph';
 import { NodeEditor } from './node-editor';
@@ -27,6 +27,10 @@ export class App {
 
   protected onGraphChange(change: GraphChanges) {
     this.graph.update((g) => applyChanges(g.nodes, g.edges, change));
+  }
+
+  protected onEdgeRejected(err: EdgeRejectedError) {
+    if (err.reason === 'cycle') this.lastEvent.set(`conexão recusada: ${err.edge.source} → ${err.edge.target} criaria um ciclo`);
   }
 
   protected toggleTheme() {
