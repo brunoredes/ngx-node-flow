@@ -9,6 +9,14 @@
   <button type="button" [disabled]="!flow()?.canUndo()" (click)="flow()?.undo()">Desfazer</button>
   <button type="button" [disabled]="!flow()?.canRedo()" (click)="flow()?.redo()">Refazer</button>
   <button type="button" (click)="flow()?.fitView()">Ver tudo</button>
+  <button type="button" (click)="arrange()">Organizar</button>
+  <button type="button" (click)="exportPng()">Exportar PNG</button>
+  <search>
+    <form [style.display]="'flex'" [style.flexDirection]="'column'" (submit)="$event.preventDefault()">
+      <label for="search-input">Buscar nó</label>
+      <input id="search-input" type="search" placeholder="Buscar nó" aria-label="Buscar nó pelo nome" (keydown.enter)="search($any($event.target).value)" />
+    </form>
+  </search>
   <button type="button" (click)="toggleTheme()">Tema: {{ light() ? 'claro' : 'escuro' }}</button>
   <span aria-live="polite">
     {{ stats?.nodes ?? 0 }} nós · {{ stats?.edges ?? 0 }} edges

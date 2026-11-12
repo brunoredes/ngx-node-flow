@@ -3,6 +3,7 @@ import { applyChanges, EdgeRejectedError, GraphChanges, GraphChunk, NodeFlow, No
 import { initialEdges, initialNodes, resolveResult } from './cells';
 import { generateGraph } from './generate-graph';
 import { geojsonGraph } from './geojson-graph';
+import { layered } from 'ngx-node-flow/layout';
 import { NodeEditor } from './node-editor';
 import { ResultPreview } from './result-preview';
 
@@ -72,4 +73,32 @@ export class App {
     this.abort?.abort();
   }
 
+  /** Search by label: centers on the first match and highlights every match (empty query clears). */
+  protected async search(text: string) {
+    const flow = this.flow()!;
+    const hits = await flow.findNodes(text);
+    await flow.highlight(hits.map((h) => h.id));
+    if (hits.length) {
+      await flow.centerOn(hits[0].id);
+      await flow.select([hits[0].id]);
+    }
+    this.lastEvent.set(text.trim() ? `busca: ${hits.length} resultado(s)` : '');
+  }
+
+  /** Lays the whole graph out left to right; one undo step. */
+  protected async arrange() {
+    const flow = this.flow()!;
+    const { nodes, edges } = await flow.snapshot();
+    await flow.moveNodes(layered(nodes, edges));
+    await flow.fitView();
+  }
+
+  protected async exportPng() {
+    const url = URL.createObjectURL(await this.flow()!.exportImage());
+    const a = this.document.createElement('a');
+    a.href = url;
+    a.download = 'fluxo.png';
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 }
