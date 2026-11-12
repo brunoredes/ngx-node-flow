@@ -4,7 +4,6 @@
     <button type="button" (click)="cancel()">Cancelar</button>
   } @else {
     <button type="button" (click)="addMany()">Adicionar 1M nós</button>
-    <button type="button" (click)="addParcels()">Carregar giant.json</button>
   }
   <button type="button" (click)="exportPng()">Exportar PNG</button>
   <search>
@@ -38,8 +37,8 @@
     }
   </nav>
   <ngx-node-flow
-    [nodes]="nodes"
-    [edges]="edges"
+    [nodes]="nodes()"
+    [edges]="edges()"
     (graphChange)="onGraphChange($event)"
     (nodeClick)="lastEvent.set('click: ' + $event)"
     (edgeCreated)="lastEvent.set('edge: ' + $event.id)"
@@ -50,4 +49,23 @@
     </ng-template>
   </ngx-node-flow>
   <!-- <app-result-preview [value]="result()" /> -->
+  <section class="posts" aria-labelledby="posts-title">
+    <h2 id="posts-title">Posts</h2>
+    @if (posts.isLoading()) {
+      <p role="status">Carregando posts…</p>
+    } @else if (posts.error()) {
+      <p role="alert">Erro ao carregar posts. <button type="button" (click)="posts.reload()">Tentar de novo</button></p>
+    } @else {
+      <ul>
+        @for (post of posts.value(); track post.id) {
+          <li>
+            <button type="button" class="card" [attr.aria-current]="openPostId() === post.id || null" (click)="openPost(post)">
+              <strong>{{ post.title }}</strong>
+              <span>{{ post.body }}</span>
+            </button>
+          </li>
+        }
+      </ul>
+    }
+  </section>
 </main>

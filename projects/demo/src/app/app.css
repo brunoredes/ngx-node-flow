@@ -9,7 +9,16 @@ nav ul { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0;
 .fab:focus-visible { outline: 2px solid var(--demo-accent); outline-offset: 2px; }
 ngx-node-flow { flex: 1; }
 app-result-preview { width: 240px; flex: none; overflow: auto; background: var(--demo-surface); color: light-dark(#1a202c, #e2e8f0); border-left: 1px solid light-dark(#cbd5e0, #ffffff33); }
+.posts { width: 280px; flex: none; overflow: auto; padding: 0 8px; background: var(--demo-surface); color: light-dark(#1a202c, #e2e8f0); border-left: 1px solid light-dark(#cbd5e0, #ffffff33); }
+.posts h2 { font-size: 1rem; margin: 12px 4px; }
+.posts ul { display: flex; flex-direction: column; gap: 8px; margin: 0 0 8px; padding: 0; list-style: none; }
+.card { display: flex; flex-direction: column; gap: 4px; width: 100%; padding: 8px 12px; text-align: left; font: inherit; color: inherit; background: var(--demo-canvas); border: 1px solid light-dark(#cbd5e0, #ffffff33); border-radius: 8px; cursor: pointer; }
+.card span { font-size: 0.875rem; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.card:hover, .card[aria-current='true'] { border-color: var(--demo-accent); }
+.card[aria-current='true'] { box-shadow: inset 4px 0 0 var(--demo-accent); }
+.card:focus-visible { outline: 2px solid var(--demo-accent); outline-offset: 2px; }
 @media (max-width: 640px) {
+  .posts { width: auto; max-height: 40%; border-left: 0; border-top: 1px solid light-dark(#cbd5e0, #ffffff33); }
   main { flex-direction: column; }
   /* Stacked layout: FAB goes below the map, list opens to its right. */
   nav { order: 1; align-self: flex-start; flex-direction: row; }

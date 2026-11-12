@@ -1,10 +1,18 @@
-import { Component, computed, DOCUMENT, inject, signal, viewChild } from '@angular/core';
+import { afterNextRender, Component, computed, DOCUMENT, inject, Injector, resource, signal, viewChild } from '@angular/core';
 import { applyChanges, EdgeRejectedError, GraphChanges, GraphChunk, NodeFlow, NodeFlowEditor } from 'ngx-node-flow';
 import { initialEdges, initialNodes, resolveResult } from './cells';
 import { generateGraph } from './generate-graph';
-import { geojsonGraph } from './geojson-graph';
+import { Post, PostComment, postGraph } from './post-graph';
 import { layered } from 'ngx-node-flow/layout';
 import { NodeEditor } from './node-editor';
+
+const API = 'https://jsonplaceholder.typicode.com';
+
+async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
+  const res = await fetch(url, { signal });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
 
 @Component({
   imports: [NodeFlow, NodeFlowEditor, NodeEditor],
@@ -13,9 +21,9 @@ import { NodeEditor } from './node-editor';
   templateUrl: './app.html',
 })
 export class App {
-  /** Initial graph only: the worker owns it from here on. */
-  protected readonly nodes = initialNodes;
-  protected readonly edges = initialEdges;
+  /** Input graph: setting it replaces the worker's graph (and clears history); edits come back via graphChange. */
+  protected readonly nodes = signal(initialNodes);
+  protected readonly edges = signal(initialEdges);
   /** Our copy of the graph, kept by folding graphChange (feeding it back to [nodes] would reset the worker). */
   private readonly graph = signal({ nodes: initialNodes, edges: initialEdges });
   protected readonly result = computed(() => resolveResult(this.graph().nodes, this.graph().edges));
@@ -24,7 +32,11 @@ export class App {
   protected readonly actionsOpen = signal(false);
   protected readonly flow = viewChild(NodeFlow);
   private readonly document = inject(DOCUMENT);
+  private readonly injector = inject(Injector);
+  protected readonly posts = resource({ loader: ({ abortSignal }) => getJson<Post[]>(`${API}/posts`, abortSignal) });
+  protected readonly openPostId = signal<number | null>(null);
   private abort: AbortController | null = null;
+  private postRequest: AbortController | null = null;
   private batch = 0;
 
   protected onGraphChange(change: GraphChanges) {
@@ -46,13 +58,24 @@ export class App {
     return this.stream('1M', () => generateGraph(1_000_000, 10_000, `b${++this.batch}-`));
   }
 
-  /** San Francisco parcels (public/giant.json), parsed line by line as the download arrives. */
-  protected addParcels() {
-    return this.stream('giant.json', async (signal) => {
-      const res = await fetch('giant.json', { signal });
-      if (!res.ok || !res.body) throw new Error(`giant.json: HTTP ${res.status}`);
-      return geojsonGraph(res.body, 10_000);
-    });
+  /** Replaces the graph with the post and its comments. */
+  protected async openPost(post: Post) {
+    this.cancel(); // a running stream would keep adding chunks into the replaced graph
+    this.postRequest?.abort();
+    const request = (this.postRequest = new AbortController());
+    try {
+      const { nodes, edges } = postGraph(post, await getJson<PostComment[]>(`${API}/comments?postId=${post.id}`, request.signal));
+      this.openPostId.set(post.id);
+      this.nodes.set(nodes);
+      this.edges.set(edges);
+      this.graph.set({ nodes, edges });
+      // the inputs reach the worker on the next change detection; fit after it
+      afterNextRender(() => this.flow()?.fitView(), { injector: this.injector });
+      this.lastEvent.set(`post ${post.id}: ${edges.length} comentário(s)`);
+    } catch (err) {
+      // aborted = another card was clicked meanwhile; its result wins
+      if (!request.signal.aborted) this.lastEvent.set(`erro ao carregar comentários: ${(err as Error).message}`);
+    }
   }
 
   private async stream(name: string, source: (signal: AbortSignal) => AsyncIterable<GraphChunk> | Promise<AsyncIterable<GraphChunk>>) {
