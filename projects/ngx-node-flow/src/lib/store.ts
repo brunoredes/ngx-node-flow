@@ -213,6 +213,27 @@ export class GraphStore {
     return s !== undefined && this.nAlive[s] ? this.mat(s) : undefined;
   }
 
+  /** The whole graph as plain arrays (placeholder slots for missing nodes are skipped). */
+  snapshot(): { nodes: FlowNode[]; edges: FlowEdge[] } {
+    const nodes: FlowNode[] = [], edges: FlowEdge[] = [];
+    for (let s = 0; s < this.nId.length; s++) if (this.nAlive[s]) nodes.push(this.mat(s));
+    for (const s of this.eIdx.values()) edges.push(this.matEdge(s));
+    return { nodes, edges };
+  }
+
+  /** World bounding box of all live nodes, or null when empty. */
+  bounds(): { x0: number; y0: number; x1: number; y1: number } | null {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (let s = 0; s < this.nId.length; s++) {
+      if (!this.nAlive[s]) continue;
+      x0 = Math.min(x0, this.nx[s]);
+      y0 = Math.min(y0, this.ny[s]);
+      x1 = Math.max(x1, this.nx[s] + this.cfg.node.width);
+      y1 = Math.max(y1, this.ny[s] + nodeHeight(this.ports[this.nPorts[s]], this.cfg));
+    }
+    return x0 === Infinity ? null : { x0, y0, x1, y1 };
+  }
+
   /** Nodes intersecting the world rect, bottom-most first (draw order). */
   query(x0: number, y0: number, x1: number, y1: number): FlowNode[] {
     const stamp = ++this.stamp;

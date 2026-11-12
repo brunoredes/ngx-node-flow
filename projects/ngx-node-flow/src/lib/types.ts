@@ -7,8 +7,16 @@ export interface FlowNode {
   outputs?: string[];
   /** A literal CSS color (no var()); falls back to the theme nodeColor. */
   color?: string;
+  /** Locked nodes cannot be dragged or removed by the user. */
+  locked?: boolean;
   /** Free-form app data, edited by the consumer's editor template. */
   data?: Record<string, unknown>;
+}
+
+/** The whole graph as plain arrays, as returned by `snapshot()`. */
+export interface GraphSnapshot {
+  nodes: FlowNode[];
+  edges: FlowEdge[];
 }
 
 export interface FlowEdge {
@@ -88,7 +96,12 @@ export type Command =
   | { op: 'remove'; id: string }
   | { op: 'upsertNode'; node: FlowNode }
   | { op: 'getNode'; id: string }
-  | { op: 'chunk'; chunk: GraphChunk };
+  | { op: 'chunk'; chunk: GraphChunk }
+  | { op: 'snapshot' }
+  | { op: 'fit'; padding: number }
+  | { op: 'center'; id: string }
+  | { op: 'zoom'; zoom: number }
+  | { op: 'select'; ids: string[] };
 
 export type ToWorker =
   | { type: 'init'; gl: OffscreenCanvas; text: OffscreenCanvas; config: NodeFlowConfig; theme: ResolvedTheme }
@@ -98,6 +111,7 @@ export type ToWorker =
   /** Pans by (panX, panY) CSS px, then zooms by factor `zoom` around (x, y). */
   | { type: 'view'; x: number; y: number; zoom: number; panX: number; panY: number }
   | { type: 'theme'; theme: ResolvedTheme }
+  | { type: 'mode'; readonly: boolean }
   | { type: 'command'; reqId: number; command: Command }
   | { type: 'stream'; reqId: number; stream: ReadableStream<GraphChunk> };
 
@@ -110,4 +124,4 @@ export type FromWorker =
   | { type: 'reply'; reqId: number; value?: unknown; error?: string }
   | { type: 'error'; message: string }
   /** Screen rect (CSS px) of the selected node; id null = nothing selected. */
-  | { type: 'selection'; id: string | null; x: number; y: number; w: number; h: number };
+  | { type: 'selection'; id: string | null; x: number; y: number; w: number; h: number; locked: boolean };

@@ -19,7 +19,7 @@ import { resolveTheme, themeStyles, watchTheme } from './theme';
 import { iterate, toReadableStream } from './stream';
 import { NodeFlowEditor } from './node-flow-editor';
 import { EdgeRejectedError } from './errors';
-import { Command, FlowEdge, FlowNode, FromWorker, GraphChanges, GraphChunk, NewFlowNode, NodeFlowTheme, ToWorker } from './types';
+import { Command, FlowEdge, FlowNode, FromWorker, GraphChanges, GraphChunk, GraphSnapshot, NewFlowNode, NodeFlowTheme, ToWorker } from './types';
 import { WORKER_SOURCE } from './worker-source';
 
 type Selection = Extract<FromWorker, { type: 'selection' }> & { id: string };
@@ -31,7 +31,7 @@ type Selection = Extract<FromWorker, { type: 'selection' }> & { id: string };
     <canvas #gl role="img" [attr.aria-label]="l.canvas"></canvas><canvas #text aria-hidden="true"></canvas>
     <span #probe hidden></span>
 
-    @if (!draft() && selection(); as s) {
+    @if (!draft() && !readonly() && selection(); as s) {
       <div
         class="nf-overlay nf-menu"
         role="group"
@@ -47,13 +47,15 @@ type Selection = Extract<FromWorker, { type: 'selection' }> & { id: string };
         <button type="button" [attr.aria-label]="l.editNode" [title]="l.editNode" (click)="edit(s.id)">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4" /></svg>
         </button>
-        <button type="button" [attr.aria-label]="l.removeNode" [title]="l.removeNode" (click)="remove(s.id)">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" /></svg>
-        </button>
+        @if (!s.locked) {
+          <button type="button" [attr.aria-label]="l.removeNode" [title]="l.removeNode" (click)="remove(s.id)">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" /></svg>
+          </button>
+        }
       </div>
     }
 
-    @if (stats()?.nodes === 0 && !draft()) {
+    @if (stats()?.nodes === 0 && !draft() && !readonly()) {
       <button
         type="button"
         class="nf-overlay nf-empty"
@@ -139,6 +141,8 @@ export class NodeFlow {
   readonly createNode = input<() => NewFlowNode>();
   /** Called before a node is removed from the menu; return false (or resolve false) to keep it. */
   readonly beforeRemove = input<(node: FlowNode) => boolean | Promise<boolean>>();
+  /** View-only: pan, zoom and select still work; nothing in the graph can change. */
+  readonly readonly = input(false);
   readonly nodeClick = output<string>();
   readonly edgeCreated = output<FlowEdge>();
   /** A connection dragged by the user was refused by a graph policy; nothing changed in the graph. */
@@ -184,6 +188,7 @@ export class NodeFlow {
       const worker = this.worker(), nodes = this.nodes(), edges = this.edges();
       worker?.postMessage({ type: 'data', nodes, edges } satisfies ToWorker);
     });
+    effect(() => this.worker()?.postMessage({ type: 'mode', readonly: this.readonly() } satisfies ToWorker));
 
     // Browser-only (skipped on SSR): canvases must exist before transferring them.
     afterNextRender(() => {
@@ -239,6 +244,31 @@ export class NodeFlow {
     } finally {
       this.setLoading(-1);
     }
+  }
+
+  /** The whole graph as the worker holds it now: the way to persist without folding every graphChange. */
+  snapshot(): Promise<GraphSnapshot> {
+    return this.command({ op: 'snapshot' });
+  }
+
+  /** Zooms and pans so every node is visible, keeping `padding` CSS px free on each side. */
+  fitView(options: { padding?: number } = {}): Promise<void> {
+    return this.command({ op: 'fit', padding: options.padding ?? 40 });
+  }
+
+  /** Pans so the node is centered, keeping the zoom. Rejects if the node does not exist. */
+  centerOn(id: string): Promise<void> {
+    return this.command({ op: 'center', id });
+  }
+
+  /** Sets the zoom (clamped to config.zoom) around the viewport center. */
+  zoomTo(zoom: number): Promise<void> {
+    return this.command({ op: 'zoom', zoom });
+  }
+
+  /** Selects the given nodes (empty clears the selection). Unknown ids are ignored. */
+  select(ids: string[]): Promise<void> {
+    return this.command({ op: 'select', ids });
   }
 
   private setLoading(delta: number) {
@@ -318,7 +348,7 @@ export class NodeFlow {
 
   protected async remove(id: string) {
     const node = await this.command<FlowNode | undefined>({ op: 'getNode', id });
-    if (!node || (await this.beforeRemove()?.(node)) === false) return;
+    if (!node || node.locked || this.readonly() || (await this.beforeRemove()?.(node)) === false) return;
     await this.command({ op: 'remove', id });
     if (this.draft()?.().id === id) this.close();
   }

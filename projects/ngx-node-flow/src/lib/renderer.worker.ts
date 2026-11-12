@@ -17,10 +17,12 @@ let width = 1, height = 1, dpr = 1;
 let cam: Camera = { x: 0, y: 0, zoom: 1 };
 let store: GraphStore;
 let selected: string | null = null;
+let readonly = false;
 
 type Drag =
   | { kind: 'pan'; sx: number; sy: number }
-  | { kind: 'node'; node: FlowNode; dx: number; dy: number; moved: boolean }
+  /** fixed: selectable but not movable (readonly view or locked node). */
+  | { kind: 'node'; node: FlowNode; dx: number; dy: number; moved: boolean; fixed: boolean }
   | { kind: 'link'; node: FlowNode; side: Side; port: string; wx: number; wy: number; detached?: FlowEdge };
 let drag: Drag | null = null;
 
@@ -179,7 +181,7 @@ function onPointer(kind: 'down' | 'move' | 'up' | 'cancel', sx: number, sy: numb
     drag = null;
   } else if (kind === 'down') {
     const hit = store.hit(w.x, w.y);
-    const port = hit?.port;
+    const port = readonly ? undefined : hit?.port;
     // grabbing a connected input picks up its edge (last one) so it can be reconnected or dropped
     const existing = port?.side === 'in' ? store.edgeInto(hit!.node.id, port.name) : undefined;
     const source = existing && store.node(existing.source);
@@ -191,7 +193,7 @@ function onPointer(kind: 'down' | 'move' | 'up' | 'cancel', sx: number, sy: numb
     } else if (hit) {
       // bring to front so it draws (and hit-tests) on top
       store.bringToFront(hit.node.id);
-      drag = { kind: 'node', node: hit.node, dx: w.x - hit.node.x, dy: w.y - hit.node.y, moved: false };
+      drag = { kind: 'node', node: hit.node, dx: w.x - hit.node.x, dy: w.y - hit.node.y, moved: false, fixed: readonly || !!hit.node.locked };
     } else {
       selected = null;
       drag = { kind: 'pan', sx, sy };
@@ -202,6 +204,7 @@ function onPointer(kind: 'down' | 'move' | 'up' | 'cancel', sx: number, sy: numb
       drag.sx = sx;
       drag.sy = sy;
     } else if (drag.kind === 'node') {
+      if (drag.fixed) return;
       store.move(drag.node.id, w.x - drag.dx, w.y - drag.dy);
       drag.moved = true;
     } else {
@@ -247,8 +250,8 @@ let lastSelection = '';
 function reportSelection() {
   const n = selected ? store.node(selected) : undefined;
   const msg: FromWorker = n
-    ? { type: 'selection', id: n.id, x: n.x * cam.zoom + cam.x, y: n.y * cam.zoom + cam.y, w: cfg.node.width * cam.zoom, h: nodeHeight(n, cfg) * cam.zoom }
-    : { type: 'selection', id: null, x: 0, y: 0, w: 0, h: 0 };
+    ? { type: 'selection', id: n.id, x: n.x * cam.zoom + cam.x, y: n.y * cam.zoom + cam.y, w: cfg.node.width * cam.zoom, h: nodeHeight(n, cfg) * cam.zoom, locked: !!n.locked }
+    : { type: 'selection', id: null, x: 0, y: 0, w: 0, h: 0, locked: false };
   const key = JSON.stringify(msg);
   if (key !== lastSelection) {
     lastSelection = key;
@@ -288,7 +291,40 @@ function run(command: Command): unknown {
       store.addChunk(command.chunk);
       schedule();
       return;
+    case 'snapshot':
+      return store.snapshot();
+    case 'fit': {
+      const b = store.bounds();
+      if (b) frame(b.x0, b.y0, b.x1, b.y1, command.padding);
+      return;
+    }
+    case 'center': {
+      const n = store.node(command.id);
+      if (!n) throw new Error(`ngx-node-flow: no node ${command.id}`);
+      const cx = n.x + cfg.node.width / 2, cy = n.y + nodeHeight(n, cfg) / 2;
+      setCam({ zoom: cam.zoom, x: width / 2 - cx * cam.zoom, y: height / 2 - cy * cam.zoom });
+      return;
+    }
+    case 'zoom':
+      setCam(zoomAt(cam, width / 2, height / 2, command.zoom / cam.zoom, cfg.zoom.min, cfg.zoom.max));
+      return;
+    case 'select':
+      selected = command.ids.find((id) => store.node(id)) ?? null;
+      schedule();
+      return;
   }
+}
+
+function setCam(c: Camera) {
+  cam = c;
+  schedule();
+}
+
+/** Fits the world rect into the viewport, `padding` CSS px on each side, zoom clamped to config. */
+function frame(x0: number, y0: number, x1: number, y1: number, padding: number) {
+  const fit = Math.min((width - 2 * padding) / (x1 - x0), (height - 2 * padding) / (y1 - y0));
+  const zoom = Math.min(cfg.zoom.max, Math.max(cfg.zoom.min, fit));
+  setCam({ zoom, x: width / 2 - ((x0 + x1) / 2) * zoom, y: height / 2 - ((y0 + y1) / 2) * zoom });
 }
 
 /** Streamed chunks land through a WritableStream, so a slow worker back-pressures the producer. */
@@ -362,6 +398,10 @@ addEventListener('message', (e: MessageEvent<ToWorker>) => {
     case 'stream':
       ingest(m.stream).then(() => reply(m.reqId), (err) => fail(m.reqId, err));
       return;
+    case 'mode':
+      readonly = m.readonly;
+      if (readonly && drag?.kind === 'link') onPointer('cancel', 0, 0);
+      break;
     case 'theme':
       theme = m.theme;
       colorCache.clear();

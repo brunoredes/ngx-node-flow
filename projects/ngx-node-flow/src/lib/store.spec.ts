@@ -1,4 +1,5 @@
 import { DEFAULT_NODE_FLOW_CONFIG as cfg } from './config';
+import { nodeHeight } from './geometry';
 import { applyChanges, GraphStore } from './store';
 import { FlowEdge, FlowNode } from './types';
 
@@ -146,6 +147,20 @@ describe('GraphStore memory layout', () => {
     expect(s.edgeCount).toBe(1);
     expect(s.node('c')).toBeUndefined();
     expect(s.node('d')?.x).toBe(600);
+  });
+
+  it('snapshot returns live nodes and edges, skipping placeholders and removed nodes', () => {
+    const s = store();
+    s.addChunk({ edges: [{ ...ab, id: 'ghost', target: 'later' }] });
+    s.remove('c');
+    const snap = s.snapshot();
+    expect(snap.nodes.map((n) => n.id).sort()).toEqual(['a', 'b']);
+    expect(snap.edges.map((e) => e.id).sort()).toEqual(['ab', 'ghost']);
+  });
+
+  it('bounds covers every live node, null when empty', () => {
+    expect(store().bounds()).toEqual({ x0: 0, y0: 0, x1: 600 + cfg.node.width, y1: nodeHeight(a(), cfg) });
+    expect(store([], []).bounds()).toBeNull();
   });
 
   it('counts placeholder endpoints only once the node arrives', () => {
