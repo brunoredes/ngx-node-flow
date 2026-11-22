@@ -63,7 +63,7 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15 # above deploy-pages' own 10-minute timeout, so its error is the one reported
     permissions:
       pages: write
       id-token: write
