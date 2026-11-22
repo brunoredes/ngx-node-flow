@@ -1,0 +1,76 @@
+# Builds the demo app (which uses the library from dist/) and publishes it to GitHub Pages.
+# Requires Settings > Pages > Build and deployment > Source: "GitHub Actions".
+# The github-pages environment only accepts deployments from the default branch, so a manual run
+# from another branch builds and tests, then stops at deploy.
+name: Deploy demo to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deployment at a time; a newer push waits instead of cancelling one already publishing.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  NG_CLI_ANALYTICS: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pages: read # configure-pages reads the Pages site (GET /repos/{owner}/{repo}/pages)
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false # npm ci runs install scripts; keep the token out of .git/config
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # The demo imports 'ngx-node-flow' from dist/, and the layout spec needs it too: build the library first.
+      - name: Build library
+        run: npm run build:lib
+
+      - name: Test library
+        run: npm test -- --watch=false
+
+      - name: Configure Pages
+        id: pages
+        uses: actions/configure-pages@v6
+
+      # base_path is "/<repo>" for a project site, "" for a custom domain.
+      - name: Build demo
+        env:
+          BASE_PATH: ${{ steps.pages.outputs.base_path }}
+        run: npx ng build demo --base-href "$BASE_PATH/"
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist/demo/browser
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
